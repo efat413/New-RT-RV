@@ -1,6 +1,7 @@
 import { D1Database } from './types';
 import { Order } from '../types';
 import { getOrderById, updateOrderInD1 } from './db';
+import { validateSteadfastApiUrl, resolveAndValidateDns } from './ssrf';
 
 /**
  * Normalized Steadfast Delivery Status Mapping
@@ -91,7 +92,11 @@ export function resolveSteadfastBaseUrls(customBaseUrl?: string): string[] {
 
   const urls: string[] = [];
   if (customBaseUrl && customBaseUrl.trim()) {
-    const clean = customBaseUrl.trim().replace(/\/+$/, '');
+    const val = validateSteadfastApiUrl(customBaseUrl);
+    if (!val.valid) {
+      throw new Error(val.error || 'Invalid Steadfast API destination. Only official Steadfast domains are permitted.');
+    }
+    const clean = (val.normalizedUrl || customBaseUrl.trim()).replace(/\/+$/, '');
     // If the legacy domain is explicitly provided, prioritize packzy first to avoid 530 errors
     if (clean.includes('portal.steadfast.com.bd')) {
       urls.push(PACKZY_PRIMARY);
@@ -115,6 +120,10 @@ export function resolveSteadfastBaseUrls(customBaseUrl?: string): string[] {
 /**
  * Resilient multi-endpoint dispatcher for Steadfast Courier API.
  * Automatically recovers from Cloudflare 530 Origin DNS errors, 5xx server issues, and timeouts.
+ * Hardened with:
+ * 1. Strict allowlist validation of candidate endpoints (only official Steadfast domains).
+ * 2. DNS rebinding verification on destination IP.
+ * 3. Manual redirect handling with allowlist check on every redirect hop to prevent SSRF and credential leaks.
  */
 export async function callSteadfastApi(
   endpointPath: string,
@@ -136,8 +145,29 @@ export async function callSteadfastApi(
     };
   }
 
+  // Pre-validate custom baseUrl to block arbitrary/internal destinations before sending credentials
+  if (credentials.baseUrl && credentials.baseUrl.trim()) {
+    const val = validateSteadfastApiUrl(credentials.baseUrl);
+    if (!val.valid) {
+      return {
+        ok: false,
+        status: 400,
+        error: val.error || 'Invalid Steadfast API base URL: only official Steadfast domains are permitted.',
+      };
+    }
+  }
+
   const cleanPath = endpointPath.replace(/^\/+/, '');
-  const candidateBaseUrls = resolveSteadfastBaseUrls(credentials.baseUrl);
+  let candidateBaseUrls: string[];
+  try {
+    candidateBaseUrls = resolveSteadfastBaseUrls(credentials.baseUrl);
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 400,
+      error: err.message || 'Invalid Steadfast API base URL.',
+    };
+  }
 
   let lastStatus = 0;
   let lastError = '';
@@ -146,6 +176,12 @@ export async function callSteadfastApi(
   for (let i = 0; i < candidateBaseUrls.length; i++) {
     const baseUrl = candidateBaseUrls[i];
     const fullUrl = `${baseUrl}/${cleanPath}`;
+
+    // Verify candidate gateway is an approved Steadfast domain
+    const initialVal = validateSteadfastApiUrl(baseUrl);
+    if (!initialVal.valid) {
+      continue;
+    }
 
     try {
       const headers: Record<string, string> = {
@@ -156,12 +192,72 @@ export async function callSteadfastApi(
         'Secret-Key': secretKey,
       };
 
-      const res = await fetch(fullUrl, {
-        method: options.method || 'GET',
-        headers,
-        body: options.body ? JSON.stringify(options.body) : undefined,
-        signal: AbortSignal.timeout(options.timeoutMs || 15000),
-      });
+      // Redirect-safe fetch execution: manual redirect handling with allowlist check on every hop
+      let currentRequestUrl = fullUrl;
+      let redirectHops = 0;
+      const maxRedirectHops = 3;
+      let res: Response | null = null;
+
+      while (redirectHops <= maxRedirectHops) {
+        const parsedUrl = new URL(currentRequestUrl);
+        const dnsCheck = await resolveAndValidateDns(parsedUrl.hostname);
+        if (!dnsCheck.valid) {
+          lastError = dnsCheck.error || 'Destination failed DNS validation';
+          break;
+        }
+
+        const controller = new AbortController();
+        const timeoutMs = options.timeoutMs || 15000;
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+          res = await fetch(currentRequestUrl, {
+            method: options.method || 'GET',
+            headers,
+            body: options.body ? JSON.stringify(options.body) : undefined,
+            redirect: 'manual', // Enforce manual redirect handling to validate every hop
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+
+        if ([301, 302, 303, 307, 308].includes(res.status)) {
+          const location = res.headers.get('location');
+          if (!location) {
+            lastError = `Steadfast returned HTTP ${res.status} redirect without Location header`;
+            break;
+          }
+
+          let nextUrl: string;
+          try {
+            nextUrl = new URL(location, currentRequestUrl).toString();
+          } catch {
+            lastError = 'Steadfast returned malformed redirect Location';
+            break;
+          }
+
+          // Validate that the redirect destination is ALSO an approved Steadfast gateway
+          const redirectVal = validateSteadfastApiUrl(nextUrl);
+          if (!redirectVal.valid) {
+            return {
+              ok: false,
+              status: 400,
+              error: `Steadfast API redirected to an unauthorized destination (${nextUrl}): ${redirectVal.error}`,
+            };
+          }
+
+          currentRequestUrl = nextUrl;
+          redirectHops++;
+          continue;
+        }
+
+        break;
+      }
+
+      if (!res || [301, 302, 303, 307, 308].includes(res.status)) {
+        continue;
+      }
 
       lastStatus = res.status;
 

@@ -68,6 +68,7 @@ import {
   MapPin,
   CreditCard,
   MessageCircle,
+  MessageSquare,
   RotateCcw,
   TicketPercent,
   Menu,
@@ -346,6 +347,7 @@ const AdminPanelContent: React.FC = () => {
   const [filterLowStockOnly, setFilterLowStockOnly] = useState(false);
   const [stockQuickAddAmount, setStockQuickAddAmount] = useState<Record<string, number>>({});
   const [stockSuccessNotice, setStockSuccessNotice] = useState<string | null>(null);
+  const [ratingSaveSuccess, setRatingSaveSuccess] = useState<string | null>(null);
 
   // Product CRUD states
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);

@@ -393,7 +393,7 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({ productId 
       return;
     }
 
-    Array.from(files).forEach((file) => {
+    Array.from(files).forEach((file: File) => {
       if (!file.type.startsWith('image/')) return;
       if (file.size > 5 * 1024 * 1024) {
         showNotification('error', 'File Too Large', 'Each image must be under 5MB.');

@@ -128,6 +128,9 @@ import {
 import {
   validateWebhookDestination,
   safeFetchWebhook,
+  validateSteadfastApiUrl,
+  validateCourierApiUrl,
+  safeFetchCourierDispatch,
 } from './ssrf';
 import {
   validateImageBuffer,
@@ -5561,9 +5564,19 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
     if (jsonErr) return jsonErr;
 
     try {
+      const baseUrl = body?.baseUrl;
+      if (baseUrl && typeof baseUrl === 'string' && baseUrl.trim()) {
+        const val = validateSteadfastApiUrl(baseUrl);
+        if (!val.valid) {
+          return jsonResponse({
+            success: false,
+            error: val.error || 'Invalid Steadfast API destination. Only official Steadfast domains are permitted.',
+          }, 400);
+        }
+      }
+
       const apiKey = (body?.apiKey || env.STEADFAST_API_KEY || '').trim();
       const secretKey = (body?.secretKey || env.STEADFAST_SECRET_KEY || '').trim();
-      const baseUrl = body?.baseUrl;
 
       if (!apiKey || !secretKey) {
         return jsonResponse({
@@ -5715,6 +5728,16 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const recipientPhone = (parcelData.recipient_phone || order.customer.phone || '').replace(/[^0-9]/g, '');
 
       if (isSteadfast) {
+        if (courierParam.baseUrl && typeof courierParam.baseUrl === 'string' && courierParam.baseUrl.trim()) {
+          const sfVal = validateSteadfastApiUrl(courierParam.baseUrl);
+          if (!sfVal.valid) {
+            return jsonResponse({
+              success: false,
+              error: sfVal.error || 'Invalid Steadfast courier base URL. Only official Steadfast domains are permitted.',
+            }, 400);
+          }
+        }
+
         // Production Steadfast credentials must come exclusively from Cloudflare Worker secrets
         const apiKey = (env.STEADFAST_API_KEY || '').trim();
         const secretKey = (env.STEADFAST_SECRET_KEY || '').trim();
@@ -5829,52 +5852,75 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         }, 400);
       }
 
+      if (!baseUrl) {
+        return jsonResponse({
+          success: false,
+          error: `${courierName} API base URL is missing. Please configure it in Courier APIs tab.`,
+        }, 400);
+      }
+
+      // CRITICAL SSRF & PII EXFILTRATION PROTECTION:
+      // Customer order data must only be dispatched to explicitly approved courier partner destinations
+      const courierVal = validateCourierApiUrl(baseUrl);
+      if (!courierVal.valid) {
+        return jsonResponse({
+          success: false,
+          error: courierVal.error || `Invalid courier destination: ${courierName} URL is not an approved courier partner domain. Arbitrary external destinations are prohibited.`,
+        }, 400);
+      }
+
       let trackingCode = '';
       let consignmentId = '';
 
-      if (baseUrl) {
-        try {
-          const cleanBase = baseUrl.replace(/\/+$/, '');
-          const endpoint = cleanBase.includes('/v1') || cleanBase.includes('/api') ? `${cleanBase}/orders` : `${cleanBase}/api/v1/orders`;
-          const headers: Record<string, string> = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Authorization': apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`,
-            'Api-Key': apiKey,
-          };
-          if (secretKey) {
-            headers['Secret-Key'] = secretKey;
-            headers['X-Secret-Key'] = secretKey;
-          }
+      try {
+        const cleanBase = (courierVal.normalizedUrl || baseUrl).replace(/\/+$/, '');
+        const endpoint = cleanBase.includes('/v1') || cleanBase.includes('/api') ? `${cleanBase}/orders` : `${cleanBase}/api/v1/orders`;
+        const headers: Record<string, string> = {
+          'Authorization': apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`,
+          'Api-Key': apiKey,
+        };
+        if (secretKey) {
+          headers['Secret-Key'] = secretKey;
+          headers['X-Secret-Key'] = secretKey;
+        }
 
-          const response = await fetch(endpoint, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              invoice: String(parcelData.invoice || order.orderNumber),
-              recipient_name: String(parcelData.recipient_name || order.customer.fullName).trim(),
-              recipient_phone: recipientPhone,
-              recipient_address: combinedAddress,
-              cod_amount: codAmount,
-              note: parcelData.note || order.customer.notes || `Order #${order.orderNumber}`,
-              weight: Number(parcelData.weight) || 0.5,
-              items_count: totalLot || 1,
-            }),
-            signal: AbortSignal.timeout(12000),
-          });
+        const dispatchResult = await safeFetchCourierDispatch({
+          url: endpoint,
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            invoice: String(parcelData.invoice || order.orderNumber),
+            recipient_name: String(parcelData.recipient_name || order.customer.fullName).trim(),
+            recipient_phone: recipientPhone,
+            recipient_address: combinedAddress,
+            cod_amount: codAmount,
+            note: parcelData.note || order.customer.notes || `Order #${order.orderNumber}`,
+            weight: Number(parcelData.weight) || 0.5,
+            items_count: totalLot || 1,
+          }),
+          timeoutMs: 12000,
+        });
 
-          if (response.ok) {
-            const data: any = await response.json().catch(() => ({}));
-            trackingCode = (data.tracking_code || data.trackingCode || data.consignment_id || data.id || '').trim();
-            consignmentId = String(data.consignment_id || data.consignmentId || data.id || '').trim();
-          } else if (response.status === 401 || response.status === 403) {
-            const data: any = await response.json().catch(() => ({}));
-            return jsonResponse({
-              success: false,
-              error: data.message || `Invalid API credentials for ${courierName}. Please check API Key and Secret.`,
-            }, 400);
-          }
-        } catch {}
+        if (dispatchResult.ok) {
+          const data = dispatchResult.data || {};
+          trackingCode = (data.tracking_code || data.trackingCode || data.consignment_id || data.id || '').trim();
+          consignmentId = String(data.consignment_id || data.consignmentId || data.id || '').trim();
+        } else if (dispatchResult.status === 401 || dispatchResult.status === 403) {
+          return jsonResponse({
+            success: false,
+            error: dispatchResult.data?.message || `Invalid API credentials for ${courierName}. Please check API Key and Secret.`,
+          }, 400);
+        } else {
+          return jsonResponse({
+            success: false,
+            error: dispatchResult.error || dispatchResult.data?.message || `Failed to communicate with ${courierName} API.`,
+          }, 400);
+        }
+      } catch (err: any) {
+        return jsonResponse({
+          success: false,
+          error: `Courier booking connection failed for ${courierName}.`,
+        }, 500);
       }
 
       if (!trackingCode || !consignmentId) {

@@ -38,7 +38,13 @@ import {
 import { callSteadfastApi, normalizeSteadfastStatus } from './src/server/courier';
 import { bufferToHex, verifyPassword, hashPassword, needsPasswordRehash } from './src/server/auth';
 import { verifyCourierWebhookAuth, computeHmacSha256Hex, computeWebhookFingerprint } from './src/server/webhookAuth';
-import { validateWebhookDestination, safeFetchWebhook } from './src/server/ssrf';
+import {
+  validateWebhookDestination,
+  safeFetchWebhook,
+  validateSteadfastApiUrl,
+  validateCourierApiUrl,
+  safeFetchCourierDispatch,
+} from './src/server/ssrf';
 import {
   validateImageBuffer,
   generateSafeMediaKey,
@@ -5084,9 +5090,20 @@ function localApiDevPlugin(): Plugin {
           if (permErr) return sendDevError(res, permErr);
 
           return readBody(async (body) => {
+            const baseUrl = body?.baseUrl;
+            if (baseUrl && typeof baseUrl === 'string' && baseUrl.trim()) {
+              const val = validateSteadfastApiUrl(baseUrl);
+              if (!val.valid) {
+                res.statusCode = 400;
+                return res.end(JSON.stringify({
+                  success: false,
+                  error: val.error || 'Invalid Steadfast API destination. Only official Steadfast domains are permitted.',
+                }));
+              }
+            }
+
             const apiKey = (body?.apiKey || process.env.STEADFAST_API_KEY || '').trim();
             const secretKey = (body?.secretKey || process.env.STEADFAST_SECRET_KEY || '').trim();
-            const baseUrl = body?.baseUrl;
 
             if (apiKey && secretKey) {
               try {
@@ -5215,6 +5232,17 @@ function localApiDevPlugin(): Plugin {
             const recipientPhone = (parcelData.recipient_phone || order.customer?.phone || '').replace(/[^0-9]/g, '');
 
             if (isSteadfast) {
+              if (courierParam.baseUrl && typeof courierParam.baseUrl === 'string' && courierParam.baseUrl.trim()) {
+                const sfVal = validateSteadfastApiUrl(courierParam.baseUrl);
+                if (!sfVal.valid) {
+                  res.statusCode = 400;
+                  return res.end(JSON.stringify({
+                    success: false,
+                    error: sfVal.error || 'Invalid Steadfast courier base URL. Only official Steadfast domains are permitted.',
+                  }));
+                }
+              }
+
               const apiKey = (process.env.STEADFAST_API_KEY || '').trim();
               const secretKey = (process.env.STEADFAST_SECRET_KEY || '').trim();
 
@@ -5333,55 +5361,80 @@ function localApiDevPlugin(): Plugin {
               }));
             }
 
+            if (!baseUrl) {
+              res.statusCode = 400;
+              return res.end(JSON.stringify({
+                success: false,
+                error: `${courierName} API base URL is missing. Please configure it in Courier APIs tab.`,
+              }));
+            }
+
+            // CRITICAL SSRF & PII EXFILTRATION PROTECTION:
+            // Customer order details must only be dispatched to approved courier partner endpoints
+            const courierVal = validateCourierApiUrl(baseUrl);
+            if (!courierVal.valid) {
+              res.statusCode = 400;
+              return res.end(JSON.stringify({
+                success: false,
+                error: courierVal.error || `Invalid courier destination: ${courierName} URL is not an approved courier partner domain. Arbitrary external destinations are prohibited.`,
+              }));
+            }
+
             let trackingCode = '';
             let consignmentId = '';
 
-            if (baseUrl) {
-              try {
-                const cleanBase = baseUrl.replace(/\/+$/, '');
-                const endpoint = cleanBase.includes('/v1') || cleanBase.includes('/api') ? `${cleanBase}/orders` : `${cleanBase}/api/v1/orders`;
-                const headers: Record<string, string> = {
-                  'Content-Type': 'application/json',
-                  'Accept': 'application/json',
-                  'Authorization': apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`,
-                  'Api-Key': apiKey,
-                };
-                if (secretKey) {
-                  headers['Secret-Key'] = secretKey;
-                  headers['X-Secret-Key'] = secretKey;
-                }
-
-                const response = await fetch(endpoint, {
-                  method: 'POST',
-                  headers,
-                  body: JSON.stringify({
-                    invoice: String(parcelData.invoice || order.orderNumber),
-                    recipient_name: String(parcelData.recipient_name || order.customer?.fullName).trim(),
-                    recipient_phone: recipientPhone,
-                    recipient_address: combinedAddress,
-                    cod_amount: codAmount,
-                    note: parcelData.note || order.customer?.notes || `Order #${order.orderNumber}`,
-                    weight: Number(parcelData.weight) || 0.5,
-                    items_count: totalLot || 1,
-                  }),
-                  signal: AbortSignal.timeout(10000),
-                });
-
-                if (response.ok) {
-                  const data: any = await response.json().catch(() => ({}));
-                  trackingCode = data.tracking_code || data.trackingCode || data.consignment_id || data.id || '';
-                  consignmentId = String(data.consignment_id || data.consignmentId || data.id || '');
-                } else if (response.status === 401 || response.status === 403) {
-                  const data: any = await response.json().catch(() => ({}));
-                  res.statusCode = 400;
-                  return res.end(JSON.stringify({
-                    success: false,
-                    error: data.message || `Invalid API credentials for ${courierName}. Please check API Key and Secret.`,
-                  }));
-                }
-              } catch {
-                // Network timeout or mock base URL fallback
+            try {
+              const cleanBase = (courierVal.normalizedUrl || baseUrl).replace(/\/+$/, '');
+              const endpoint = cleanBase.includes('/v1') || cleanBase.includes('/api') ? `${cleanBase}/orders` : `${cleanBase}/api/v1/orders`;
+              const headers: Record<string, string> = {
+                'Authorization': apiKey.startsWith('Bearer ') ? apiKey : `Bearer ${apiKey}`,
+                'Api-Key': apiKey,
+              };
+              if (secretKey) {
+                headers['Secret-Key'] = secretKey;
+                headers['X-Secret-Key'] = secretKey;
               }
+
+              const dispatchResult = await safeFetchCourierDispatch({
+                url: endpoint,
+                method: 'POST',
+                headers,
+                body: JSON.stringify({
+                  invoice: String(parcelData.invoice || order.orderNumber),
+                  recipient_name: String(parcelData.recipient_name || order.customer?.fullName).trim(),
+                  recipient_phone: recipientPhone,
+                  recipient_address: combinedAddress,
+                  cod_amount: codAmount,
+                  note: parcelData.note || order.customer?.notes || `Order #${order.orderNumber}`,
+                  weight: Number(parcelData.weight) || 0.5,
+                  items_count: totalLot || 1,
+                }),
+                timeoutMs: 12000,
+              });
+
+              if (dispatchResult.ok) {
+                const data = dispatchResult.data || {};
+                trackingCode = (data.tracking_code || data.trackingCode || data.consignment_id || data.id || '').trim();
+                consignmentId = String(data.consignment_id || data.consignmentId || data.id || '').trim();
+              } else if (dispatchResult.status === 401 || dispatchResult.status === 403) {
+                res.statusCode = 400;
+                return res.end(JSON.stringify({
+                  success: false,
+                  error: dispatchResult.data?.message || `Invalid API credentials for ${courierName}. Please check API Key and Secret.`,
+                }));
+              } else {
+                res.statusCode = 400;
+                return res.end(JSON.stringify({
+                  success: false,
+                  error: dispatchResult.error || dispatchResult.data?.message || `Failed to communicate with ${courierName} API.`,
+                }));
+              }
+            } catch (err: any) {
+              res.statusCode = 500;
+              return res.end(JSON.stringify({
+                success: false,
+                error: `Courier booking connection failed for ${courierName}.`,
+              }));
             }
 
             if (!trackingCode || !consignmentId) {
