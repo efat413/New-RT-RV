@@ -1111,6 +1111,43 @@ export function isSuperAdminUserIdServer(userId: string | null | undefined, env?
 }
 
 /**
+ * Server-authoritative check for Super Administrator identity.
+ * Evaluates authoritative database role and immutable server-configured user IDs.
+ * Ordinary customer accounts are never granted super admin status, even if their email matches SUPER_ADMIN_EMAILS.
+ * Server environment emails alone do not grant super admin privileges.
+ */
+export function isSuperAdminUserServer(
+  u?: { role?: string; email?: string; id?: string } | null,
+  env?: any
+): boolean {
+  if (!u) return false;
+  // An ordinary customer account must NEVER receive super-admin privileges
+  if (u.role === 'customer') return false;
+  // Immutable server-side database role 'super_admin' is authoritative
+  if (u.role === 'super_admin') return true;
+  // Immutable server-side configured user ID is authoritative
+  if (u.id && isSuperAdminUserIdServer(u.id, env)) return true;
+  return false;
+}
+
+/**
+ * Identifies whether a target account is a protected Super Administrator account.
+ * Target accounts with role 'super_admin', configured super-admin user IDs,
+ * or configured super-admin emails are protected against modification, deletion,
+ * demotion, permission editing, or password reset by unauthorized actors.
+ */
+export function isProtectedSuperAdminTarget(
+  u?: { role?: string; email?: string; id?: string } | null,
+  env?: any
+): boolean {
+  if (!u) return false;
+  if (u.role === 'super_admin') return true;
+  if (u.id && isSuperAdminUserIdServer(u.id, env)) return true;
+  if (u.email && isSuperAdminEmailServer(u.email, env)) return true;
+  return false;
+}
+
+/**
  * Normalized sets for detecting privilege escalation attempts in requests.
  * Covers camelCase, snake_case, alias fields, duplicate fields, and casing variations.
  */

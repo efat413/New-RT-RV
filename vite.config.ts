@@ -1810,6 +1810,12 @@ function localApiDevPlugin(): Plugin {
               return res.end(JSON.stringify({ success: false, error: 'Password must be at least 10 characters long.' }));
             }
 
+            // Security Rule: Public registration cannot claim a reserved super admin email address
+            if (devSuperAdminEmails.includes(email)) {
+              res.statusCode = 403;
+              return res.end(JSON.stringify({ success: false, error: 'Registration with this email address is not permitted.' }));
+            }
+
             const existing = devUsers.find((u) => u.email.toLowerCase() === email);
             if (existing) {
               res.statusCode = 409;
@@ -3617,6 +3623,9 @@ function localApiDevPlugin(): Plugin {
               if (u.role === 'super_admin' && authResult.auth!.role !== 'super_admin') {
                 return sendDevError(res, { status: 403, body: { success: false, error: 'Forbidden: Only Super Administrator can create a Super Admin account.' } });
               }
+              if (u.email && devSuperAdminEmails.includes(String(u.email).toLowerCase().trim()) && authResult.auth!.role !== 'super_admin') {
+                return sendDevError(res, { status: 403, body: { success: false, error: 'Forbidden: Cannot assign a reserved Super Administrator email address.' } });
+              }
               if (authResult.auth!.role !== 'super_admin' && (detectPrivilegeEscalationAttempt(body) || u.role !== undefined || u.permissions || u.permissions_json)) {
                 return sendDevError(res, { status: 403, body: { success: false, error: 'Forbidden: Only Super Administrator can configure account roles or permissions.' } });
               }
@@ -3746,6 +3755,10 @@ function localApiDevPlugin(): Plugin {
                 const cleanEmail = String(updates.email).toLowerCase().trim();
                 if (!cleanEmail || !cleanEmail.includes('@') || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
                   return sendDevError(res, { status: 400, body: { success: false, error: 'Please enter a valid email address.' } });
+                }
+                // Security Rule: Prevent changing email to the configured super-admin email to gain elevated privileges
+                if (devSuperAdminEmails.includes(cleanEmail) && authResult.auth!.role !== 'super_admin') {
+                  return sendDevError(res, { status: 403, body: { success: false, error: 'Forbidden: Cannot set email to a reserved Super Administrator email address.' } });
                 }
                 const emailExists = devUsers.some((u) => u.id !== usrId && u.email?.toLowerCase().trim() === cleanEmail);
                 if (emailExists) {
@@ -4069,6 +4082,36 @@ function localApiDevPlugin(): Plugin {
             try {
               const rawOrder = body.order || body;
 
+              // Authoritative Identity Determination (dev server):
+              // Support BOTH HttpOnly cookie ('auth_token') and 'Authorization: Bearer <token>' via requireDevAuth
+              let hasAuthToken = false;
+              const devCookieHeader = (req.headers['cookie'] || '') as string;
+              if (/(?:^|;\s*)auth_token=([^;]+)/.test(devCookieHeader)) {
+                hasAuthToken = true;
+              } else {
+                const devAuthHeader = (req.headers['authorization'] || '') as string;
+                if (devAuthHeader && devAuthHeader.startsWith('Bearer ')) {
+                  hasAuthToken = true;
+                }
+              }
+
+              let devAuth: DevAuthResult | null = null;
+              let devUserId: string | undefined = undefined;
+              let devUserEmail: string | undefined = undefined;
+              let devUserObj: any = null;
+
+              if (hasAuthToken) {
+                devAuth = requireDevAuth(req);
+                if (devAuth.error) {
+                  return sendDevError(res, devAuth.error);
+                }
+                if (devAuth.auth?.user) {
+                  devUserObj = devAuth.auth.user;
+                  devUserId = String(devUserObj.id || '').trim() || undefined;
+                  devUserEmail = String(devUserObj.email || '').trim().toLowerCase() || undefined;
+                }
+              }
+
               if (!rawOrder?.customer?.fullName || !rawOrder?.customer?.phone || !rawOrder?.customer?.fullAddress) {
                 res.statusCode = 400;
                 return res.end(JSON.stringify({ success: false, error: 'Customer full name, phone number, and delivery address are required.' }));
@@ -4120,19 +4163,6 @@ function localApiDevPlugin(): Plugin {
                   res.statusCode = 403;
                   return res.end(JSON.stringify({ success: false, error: 'Order submission restricted for this contact number.' }));
                 }
-              }
-
-              // Authoritative Identity Determination (dev server):
-              // Support BOTH HttpOnly cookie ('auth_token') and 'Authorization: Bearer <token>' via requireDevAuth
-              const devAuth = requireDevAuth(req);
-              let devUserId: string | undefined = undefined;
-              let devUserEmail: string | undefined = undefined;
-              let devUserObj: any = null;
-
-              if (!devAuth.error && devAuth.auth?.user) {
-                devUserObj = devAuth.auth.user;
-                devUserId = String(devUserObj.id || '').trim() || undefined;
-                devUserEmail = String(devUserObj.email || '').trim().toLowerCase() || undefined;
               }
 
               const cleanEmail = (rawOrder.customer?.email || rawOrder.userEmail || devUserEmail || '').toLowerCase().trim();
@@ -4282,7 +4312,7 @@ function localApiDevPlugin(): Plugin {
               const authoritativeTotalAmount = Math.max(0, authoritativeSubtotal + authoritativeDeliveryFee - authoritativeDiscount);
 
               const isDevAdmin = Boolean(
-                devAuth.auth &&
+                devAuth?.auth &&
                 (devAuth.auth.user.role === 'super_admin' || devAuth.auth.permissions?.['order.manage'])
               );
               const rawDevAdvance = isDevAdmin && rawOrder.advancePayment != null ? Number(rawOrder.advancePayment) : 0;

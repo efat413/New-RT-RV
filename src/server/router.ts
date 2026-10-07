@@ -834,22 +834,13 @@ import {
   getSuperAdminUserIds,
   isSuperAdminEmailServer,
   isSuperAdminUserIdServer,
+  isSuperAdminUserServer,
+  isProtectedSuperAdminTarget,
   detectPrivilegeEscalationAttempt,
   normalizePermissionsInput,
 } from './permissions';
 
-/**
- * Server-authoritative check for Super Administrator identity.
- * Evaluates role, configured server env emails, and configured server env user IDs.
- * Never uses hardcoded emails or client-controlled values.
- */
-export function isSuperAdminUserServer(u?: { role?: string; email?: string; id?: string } | null, env?: any): boolean {
-  if (!u) return false;
-  if (u.role === 'super_admin') return true;
-  if (u.email && isSuperAdminEmailServer(u.email, env)) return true;
-  if (u.id && isSuperAdminUserIdServer(u.id, env)) return true;
-  return false;
-}
+export { isSuperAdminUserServer, isProtectedSuperAdminTarget };
 
 /**
  * Authenticated User Context for Backend RBAC
@@ -1790,6 +1781,11 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         return jsonResponse({ success: false, error: 'Password must be at least 10 characters long.' }, 400);
       }
 
+      // Security Rule: Public registration cannot claim a reserved super admin email address
+      if (isSuperAdminEmailServer(email, env)) {
+        return jsonResponse({ success: false, error: 'Registration with this email address is not permitted.' }, 403);
+      }
+
       // Check D1 for existing user
       const existingUser = await getUserByEmailOrUsername(env.DB, email);
       if (existingUser) {
@@ -2289,7 +2285,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
     }
 
     // Target user protection: super_admin permissions cannot be modified via this API!
-    if (isSuperAdminUserServer(targetUserRow, env) || targetUserRow.role === 'super_admin') {
+    if (isProtectedSuperAdminTarget(targetUserRow, env) || isSuperAdminUserServer(targetUserRow, env) || targetUserRow.role === 'super_admin') {
       return jsonResponse(
         { success: false, error: 'Forbidden: Super Administrator permissions cannot be modified.' },
         403
@@ -2412,7 +2408,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       return jsonResponse({ success: false, error: 'Method not allowed.' }, 405);
     }
 
-    const isTargetSuperAdmin = isSuperAdminUserServer(targetUserRow, env) || targetUserRow.role === 'super_admin';
+    const isTargetSuperAdmin = isProtectedSuperAdminTarget(targetUserRow, env) || isSuperAdminUserServer(targetUserRow, env) || targetUserRow.role === 'super_admin';
 
     const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
     if (jsonErr) return jsonErr;
@@ -4164,7 +4160,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         // If requester is admin or sub_admin:
         // Exclude ALL super_admin accounts and protect Super Admin information entirely
         const nonSuperAdminUsers = allUsers.filter(
-          (u) => !isSuperAdminUserServer(u, env)
+          (u) => !isSuperAdminUserServer(u, env) && !isProtectedSuperAdminTarget(u, env)
         );
 
         return jsonResponse({ success: true, count: nonSuperAdminUsers.length, users: nonSuperAdminUsers });
@@ -4190,6 +4186,14 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         if (userData.role === 'super_admin' && auth!.role !== 'super_admin') {
           return jsonResponse(
             { success: false, error: 'Forbidden: Only a Super Administrator can create a Super Admin account.' },
+            403
+          );
+        }
+
+        // Sub-admin or admin can NEVER assign a reserved super admin email address
+        if (userData.email && isSuperAdminEmailServer(userData.email, env) && auth!.role !== 'super_admin') {
+          return jsonResponse(
+            { success: false, error: 'Forbidden: Cannot assign a reserved Super Administrator email address.' },
             403
           );
         }
@@ -4252,7 +4256,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
 
       // Check self-update vs administrative update
       const isSelf = auth!.dbUser.id === usrId;
-      const isTargetSuperAdmin = isSuperAdminUserServer(targetUser, env) || targetUser.role === 'super_admin';
+      const isTargetSuperAdmin = isProtectedSuperAdminTarget(targetUser, env) || isSuperAdminUserServer(targetUser, env) || targetUser.role === 'super_admin';
 
       if (isTargetSuperAdmin && auth!.role !== 'super_admin') {
         return jsonResponse(
@@ -4381,6 +4385,17 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
               400
             );
           }
+          // Security Rule: Prevent a user from changing their email to the configured super-admin email and gaining elevated privileges
+          if (isSuperAdminEmailServer(cleanEmail, env)) {
+            const isSelfAlreadySuper = auth!.role === 'super_admin' && isProtectedSuperAdminTarget(auth!.dbUser, env);
+            if (!isSelfAlreadySuper) {
+              return jsonResponse(
+                { success: false, error: 'Forbidden: Cannot set email to a reserved Super Administrator email address.' },
+                403
+              );
+            }
+          }
+
           const existingWithEmail = await env.DB.prepare(
             'SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id != ?'
           )
@@ -4392,6 +4407,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
               400
             );
           }
+
           updates.email = cleanEmail;
         }
 
@@ -4467,7 +4483,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       }
 
       // The primary master Super Admin account can NEVER be deleted!
-      if (isSuperAdminUserServer(targetUser, env) || targetUser.role === 'super_admin') {
+      if (isProtectedSuperAdminTarget(targetUser, env) || isSuperAdminUserServer(targetUser, env) || targetUser.role === 'super_admin') {
         return jsonResponse(
           { success: false, error: 'Forbidden: Super Administrator accounts cannot be deleted.' },
           403
@@ -4525,7 +4541,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       return jsonResponse({ success: false, error: 'User account not found.' }, 404);
     }
 
-    const isTargetSuper = isSuperAdminUserServer(targetUser, env) || targetUser.role === 'super_admin';
+    const isTargetSuper = isProtectedSuperAdminTarget(targetUser, env) || isSuperAdminUserServer(targetUser, env) || targetUser.role === 'super_admin';
 
     // STRICT RULE (Section 11): ONLY the currently authenticated Super Admin can change their OWN Super Admin password!
     if (isTargetSuper) {
@@ -4711,28 +4727,24 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       //   - Strip client-supplied userId to prevent account impersonation
       verifiedTokenUser = null;
       let authenticatedDbUser: any = null;
-      let authenticatedAuthContext: any = null;
+      let authenticatedAuthContext: AuthContext | null = null;
 
       const token = extractTokenFromRequest(request);
       if (token) {
-        try {
-          // Re-use existing requireAuth helper (checks token, DB existence, password signature, and active status)
-          const authRes = await requireAuth(request, env);
-          if (!authRes.errorResponse && authRes.auth) {
-            authenticatedDbUser = authRes.auth.dbUser;
-            verifiedTokenUser = authRes.auth.tokenUser;
-            authenticatedAuthContext = authRes.auth;
-          } else {
-            // Fallback token verification using resolveAuthSecret & verifyAuthToken
-            // (e.g. for valid JWTs when D1 user lookup is transiently bypassed or in testing)
-            const secret = await resolveAuthSecret(env);
-            const fallbackTokenUser = await verifyAuthToken(token, secret, env);
-            if (fallbackTokenUser) {
-              verifiedTokenUser = fallbackTokenUser;
-            }
-          }
-        } catch {
-          // If token verification encounters an error, safely treat as unauthenticated guest checkout
+        // ONE authoritative authentication path: requireAuth validates the cryptographic token,
+        // D1 user account existence, password signature (session revocation), account active status,
+        // and role consistency.
+        const authRes = await requireAuth(request, env);
+        if (authRes.errorResponse) {
+          // If authentication fails because token is invalid/expired, user is missing, deactivated,
+          // revoked, or unauthorized, the request must be rejected immediately.
+          await rollbackOrderRateLimit(clientIp, env.DB);
+          return authRes.errorResponse;
+        }
+        if (authRes.auth) {
+          authenticatedDbUser = authRes.auth.dbUser;
+          verifiedTokenUser = authRes.auth.tokenUser;
+          authenticatedAuthContext = authRes.auth;
         }
       }
 
