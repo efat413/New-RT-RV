@@ -3831,11 +3831,49 @@ export async function insertOrder(db: D1Database, order: Order, options?: { isTr
   const paymentStatus = paymentMethod === 'dbbl' ? 'Unverified' : 'Pending';
   const shippingStatus = 'Pending';
 
+  // TASK 1: Customer Payment Metadata Must Be Untrusted
+  // Sanitize transactionId & dbblDetails; strip HTML/scripts, enforce length limits,
+  // and mark customer-submitted data as UNVERIFIED.
+  const rawTrxId = order.transactionId ? String(order.transactionId).replace(/<[^>]*>/g, '').trim() : '';
+  const sanitizedTrxId = rawTrxId ? rawTrxId.slice(0, 100) : null;
+
+  let sanitizedDbblDetailsJson: string | null = null;
+  if (order.dbblDetails && typeof order.dbblDetails === 'object') {
+    const rawBank = String(order.dbblDetails.senderBank || '').replace(/<[^>]*>/g, '').trim().slice(0, 100);
+    const rawAcc = String(order.dbblDetails.senderAccountOrPhone || '').replace(/<[^>]*>/g, '').trim().slice(0, 50);
+    const rawDtTrx = String(order.dbblDetails.transactionId || rawTrxId || '').replace(/<[^>]*>/g, '').trim().slice(0, 100);
+    let slipUrl = String(order.dbblDetails.depositSlipUrl || '').trim();
+    if (slipUrl) {
+      if (
+        slipUrl.length > 500 ||
+        (!slipUrl.startsWith('https://') && !slipUrl.startsWith('http://') && !slipUrl.startsWith('/api/media/')) ||
+        /<[^>]*>/.test(slipUrl)
+      ) {
+        slipUrl = '';
+      }
+    }
+
+    sanitizedDbblDetailsJson = JSON.stringify({
+      senderBank: rawBank,
+      senderAccountOrPhone: rawAcc,
+      transactionId: rawDtTrx,
+      depositSlipUrl: slipUrl || undefined,
+      isCustomerSubmitted: true,
+      isVerified: false,
+      submittedAt: new Date().toISOString(),
+    });
+  }
+
   // Format recipient address cleanly
   let customerFullAddress = order.customer.fullAddress.trim();
   if (order.customer.area && !customerFullAddress.toLowerCase().includes(order.customer.area.trim().toLowerCase())) {
     customerFullAddress = `${customerFullAddress}, ${order.customer.area.trim()}`;
   }
+
+  const sanitizedCustomerName = String(order.customer.fullName || '').replace(/<[^>]*>/g, '').trim().slice(0, 100);
+  const sanitizedCustomerAddress = String(customerFullAddress || '').replace(/<[^>]*>/g, '').trim().slice(0, 300);
+  const sanitizedCustomerDistrict = order.customer.district ? String(order.customer.district).replace(/<[^>]*>/g, '').trim().slice(0, 50) : null;
+  const sanitizedCustomerNotes = order.customer.notes ? String(order.customer.notes).replace(/<[^>]*>/g, '').trim().slice(0, 500) : null;
 
   // 9. Construct atomic D1 batch transaction (order insertion + stock deductions)
   await ensureOrderTableSchema(db);
@@ -3899,12 +3937,12 @@ export async function insertOrder(db: D1Database, order: Order, options?: { isTr
         currentOrderNumber,
         order.userId || null,
         order.userEmail || null,
-        order.customer.fullName.trim(),
+        sanitizedCustomerName,
         cleanCustomerPhone,
-        customerFullAddress,
-        order.customer.district || null,
+        sanitizedCustomerAddress,
+        sanitizedCustomerDistrict,
         deliveryZone,
-        order.customer.notes || null,
+        sanitizedCustomerNotes,
         JSON.stringify(verifiedItems),
         authoritativeSubtotal,
         authoritativeDeliveryFee,
@@ -3913,14 +3951,14 @@ export async function insertOrder(db: D1Database, order: Order, options?: { isTr
         authoritativeDiscount,
         paymentMethod,
         paymentStatus,
-        order.transactionId || null,
+        sanitizedTrxId,
         shippingStatus,
         null, // Courier name initial null
         null, // Courier waybill initial null
         null, // Consignment ID initial null
         null, // Courier status initial null
         null,
-        order.dbblDetails ? JSON.stringify(order.dbblDetails) : null,
+        sanitizedDbblDetailsJson,
         null,
         null,
         totalOrderCost,

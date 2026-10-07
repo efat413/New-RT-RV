@@ -3824,9 +3824,21 @@ const AdminPanelContent: React.FC = () => {
                                 {/* DBBL Bank Transfer Details Box */}
                                 {isDbbl && (
                                   <div className="p-2 bg-blue-50/70 border border-blue-100 rounded-xl space-y-1 text-[10px] text-slate-700">
-                                    <div className="flex items-center gap-1 font-bold text-blue-900">
-                                      <Building2 className="w-3 h-3 text-blue-600" />
-                                      <span>Direct DBBL Transfer</span>
+                                    <div className="flex items-center justify-between gap-1 font-bold text-blue-900">
+                                      <div className="flex items-center gap-1">
+                                        <Building2 className="w-3 h-3 text-blue-600" />
+                                        <span>Direct DBBL Transfer</span>
+                                      </div>
+                                      {ord.dbblDetails?.isVerified || ord.paymentStatus === 'Paid' || ord.paymentStatus === 'PAID' ? (
+                                        <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                          <CheckCircle2 className="w-2.5 h-2.5" />
+                                          Verified
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200" title="Customer-submitted unverified payment metadata">
+                                          Customer Submitted (Unverified)
+                                        </span>
+                                      )}
                                     </div>
                                     <div>
                                       <span className="text-slate-500">TrxID: </span>
@@ -10123,9 +10135,20 @@ const AdminPanelContent: React.FC = () => {
                       <Building2 className="w-3.5 h-3.5 text-blue-600" />
                       Bank Transfer Verification Details
                     </span>
-                    <span className="text-[10px] text-blue-600 font-semibold">
-                      Method: {editingOrder.paymentMethod.toUpperCase()}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {editingOrder.dbblDetails?.isVerified || editingOrder.paymentStatus === 'Paid' || editingOrder.paymentStatus === 'PAID' ? (
+                        <span className="text-[9px] text-emerald-700 bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded font-bold">
+                          Verified by Admin
+                        </span>
+                      ) : (
+                        <span className="text-[9px] text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded font-bold">
+                          Customer Submitted (Unverified)
+                        </span>
+                      )}
+                      <span className="text-[10px] text-blue-600 font-semibold">
+                        Method: {editingOrder.paymentMethod.toUpperCase()}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">

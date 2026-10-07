@@ -89,6 +89,27 @@ export async function resolveAuthSecret(env?: { ADMIN_SECRET?: string; JWT_SECRE
 export const PBKDF2_RECOMMENDED_ITERATIONS = 600000;
 export const PBKDF2_LEGACY_ITERATIONS = 100000;
 
+export const MIN_PASSWORD_LENGTH = 10;
+export const MAX_PASSWORD_LENGTH = 128;
+
+/**
+ * Validates password length strictly enforcing both minimum complexity
+ * and maximum length to defend against resource exhaustion (DoS) attacks on PBKDF2.
+ */
+export function validatePasswordLength(password: string): { valid: boolean; error?: string } {
+  if (!password || typeof password !== 'string') {
+    return { valid: false, error: 'Password is required.' };
+  }
+  const len = password.length;
+  if (len < MIN_PASSWORD_LENGTH) {
+    return { valid: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters long.` };
+  }
+  if (len > MAX_PASSWORD_LENGTH) {
+    return { valid: false, error: `Password cannot exceed ${MAX_PASSWORD_LENGTH} characters.` };
+  }
+  return { valid: true };
+}
+
 export function bufferToHex(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let hex = '';

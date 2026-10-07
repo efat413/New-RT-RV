@@ -36,7 +36,7 @@ import {
   type PermissionKey,
 } from './src/server/permissions';
 import { callSteadfastApi, normalizeSteadfastStatus } from './src/server/courier';
-import { bufferToHex, verifyPassword, hashPassword, needsPasswordRehash } from './src/server/auth';
+import { bufferToHex, verifyPassword, hashPassword, needsPasswordRehash, validatePasswordLength, MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH } from './src/server/auth';
 import { verifyCourierWebhookAuth, computeHmacSha256Hex, computeWebhookFingerprint } from './src/server/webhookAuth';
 import {
   validateWebhookDestination,
@@ -51,6 +51,7 @@ import {
   isValidMediaKey,
   getSafeMediaHeaders,
   MAX_IMAGE_SIZE_BYTES,
+  validateReviewImages,
 } from './src/server/imageSecurity';
 
 process.env.ADMIN_SECRET = process.env.ADMIN_SECRET || 'dev-secret-test-shared-999';
@@ -1587,15 +1588,67 @@ function localApiDevPlugin(): Plugin {
           }
         }
 
-        // Helper to read JSON request body
-        const readBody = (callback: (body: any) => void) => {
+        // Authoritative dev body limits
+        const DEV_BODY_LIMITS = {
+          AUTH: 16 * 1024,
+          USER_UPDATE: 32 * 1024,
+          ORDER: 64 * 1024,
+          SETTINGS: 256 * 1024,
+          REVIEW: 8 * 1024 * 1024,
+          DEFAULT: 64 * 1024,
+        };
+
+        // Helper to read JSON request body with authoritative size protection
+        const readBody = (callback: (body: any) => void, maxSizeBytes = DEV_BODY_LIMITS.DEFAULT) => {
+          const contentLengthHeader = req.headers['content-length'];
+          if (contentLengthHeader) {
+            const clen = parseInt(String(contentLengthHeader), 10);
+            if (!isNaN(clen) && clen > maxSizeBytes) {
+              res.statusCode = 413;
+              res.setHeader('Content-Type', 'application/json');
+              return res.end(JSON.stringify({
+                success: false,
+                error: 'Request payload exceeds maximum allowed size.',
+              }));
+            }
+          }
+
           let raw = '';
-          req.on('data', (chunk) => { raw += chunk; });
+          let totalBytes = 0;
+          let isTooLarge = false;
+
+          req.on('data', (chunk: any) => {
+            if (isTooLarge) return;
+            const chunkLen = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
+            totalBytes += chunkLen;
+            if (totalBytes > maxSizeBytes) {
+              isTooLarge = true;
+              res.statusCode = 413;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({
+                success: false,
+                error: 'Request payload exceeds maximum allowed size.',
+              }));
+              req.destroy();
+              return;
+            }
+            raw += chunk;
+          });
+
           req.on('end', () => {
+            if (isTooLarge) return;
             let parsed: any;
             if (raw && raw.trim()) {
               try {
                 parsed = JSON.parse(raw);
+                if (parsed === null || typeof parsed !== 'object') {
+                  res.statusCode = 400;
+                  res.setHeader('Content-Type', 'application/json');
+                  return res.end(JSON.stringify({
+                    success: false,
+                    error: 'Malformed JSON payload. Please provide valid JSON.',
+                  }));
+                }
               } catch {
                 res.statusCode = 400;
                 res.setHeader('Content-Type', 'application/json');
@@ -1611,10 +1664,44 @@ function localApiDevPlugin(): Plugin {
           });
         };
 
-        const readRawBody = (callback: (raw: string, body: any, isMalformedJson?: boolean) => void) => {
+        const readRawBody = (callback: (raw: string, body: any, isMalformedJson?: boolean) => void, maxSizeBytes = DEV_BODY_LIMITS.DEFAULT) => {
+          const contentLengthHeader = req.headers['content-length'];
+          if (contentLengthHeader) {
+            const clen = parseInt(String(contentLengthHeader), 10);
+            if (!isNaN(clen) && clen > maxSizeBytes) {
+              res.statusCode = 413;
+              res.setHeader('Content-Type', 'application/json');
+              return res.end(JSON.stringify({
+                success: false,
+                error: 'Request payload exceeds maximum allowed size.',
+              }));
+            }
+          }
+
           let raw = '';
-          req.on('data', (chunk) => { raw += chunk; });
+          let totalBytes = 0;
+          let isTooLarge = false;
+
+          req.on('data', (chunk: any) => {
+            if (isTooLarge) return;
+            const chunkLen = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
+            totalBytes += chunkLen;
+            if (totalBytes > maxSizeBytes) {
+              isTooLarge = true;
+              res.statusCode = 413;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({
+                success: false,
+                error: 'Request payload exceeds maximum allowed size.',
+              }));
+              req.destroy();
+              return;
+            }
+            raw += chunk;
+          });
+
           req.on('end', () => {
+            if (isTooLarge) return;
             let parsed = {};
             let isMalformed = false;
             if (raw && raw.trim()) {

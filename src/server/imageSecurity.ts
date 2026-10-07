@@ -255,3 +255,152 @@ export function getSafeMediaHeaders(mime: string): Record<string, string> {
     'Vary': 'Accept',
   };
 }
+
+export const MAX_REVIEW_IMAGES_COUNT = 5;
+export const MAX_REVIEW_IMAGE_BYTES = 2 * 1024 * 1024; // 2 Megabytes max per review photo
+
+/**
+ * Validates, hardens, and filters review image attachments.
+ * - Enforces maximum 5 photos per review.
+ * - Reuses binary magic-byte inspection (validateImageBuffer) to verify format (JPEG, PNG, WebP, GIF, ICO).
+ * - Strictly rejects vector graphics (SVG), HTML, and executable scripts.
+ * - Strictly limits image payload size to 2MB to protect database & memory limits.
+ * - Validates media asset paths (/api/media/<key>) against path traversal.
+ */
+export function validateReviewImages(
+  inputImages: any
+): { valid: boolean; images: string[]; error?: string } {
+  if (!inputImages) {
+    return { valid: true, images: [] };
+  }
+
+  if (!Array.isArray(inputImages)) {
+    return { valid: false, images: [], error: 'Review images must be an array.' };
+  }
+
+  if (inputImages.length > MAX_REVIEW_IMAGES_COUNT) {
+    return {
+      valid: false,
+      images: [],
+      error: `A maximum of ${MAX_REVIEW_IMAGES_COUNT} images can be attached to a review.`,
+    };
+  }
+
+  const sanitizedList: string[] = [];
+
+  for (let i = 0; i < inputImages.length; i++) {
+    const raw = inputImages[i];
+    if (typeof raw !== 'string') {
+      return { valid: false, images: [], error: 'Invalid image format.' };
+    }
+
+    const img = raw.trim();
+    if (!img) continue;
+
+    // Reject executable markup or script tags immediately
+    if (
+      /<(?:script|svg|html|iframe|object|embed|style)/i.test(img) ||
+      /javascript:/i.test(img) ||
+      /vbscript:/i.test(img) ||
+      /data:text\//i.test(img) ||
+      /data:image\/svg/i.test(img)
+    ) {
+      return {
+        valid: false,
+        images: [],
+        error: 'Disallowed file content: Vector graphics (SVG), HTML, and executable scripts are strictly prohibited.',
+      };
+    }
+
+    // 1. Data URL inspection
+    if (img.startsWith('data:')) {
+      const dataUrlMatch = img.match(
+        /^data:image\/(jpeg|jpg|png|webp|gif|x-icon|vnd\.microsoft\.icon);base64,([A-Za-z0-9+/=]+)$/i
+      );
+      if (!dataUrlMatch) {
+        return {
+          valid: false,
+          images: [],
+          error: 'Invalid review image. Only JPEG, PNG, WebP, GIF, and ICO image formats are accepted.',
+        };
+      }
+
+      const base64Data = dataUrlMatch[2];
+      // Quick length check: base64 overhead is ~4/3 of binary
+      if (base64Data.length > Math.ceil((MAX_REVIEW_IMAGE_BYTES * 4) / 3) + 256) {
+        return {
+          valid: false,
+          images: [],
+          error: 'Review image exceeds maximum allowed limit of 2MB.',
+        };
+      }
+
+      let rawBytes: Uint8Array;
+      try {
+        const binStr = atob(base64Data);
+        if (binStr.length > MAX_REVIEW_IMAGE_BYTES) {
+          return {
+            valid: false,
+            images: [],
+            error: 'Review image exceeds maximum allowed limit of 2MB.',
+          };
+        }
+        rawBytes = new Uint8Array(binStr.length);
+        for (let j = 0; j < binStr.length; j++) {
+          rawBytes[j] = binStr.charCodeAt(j);
+        }
+      } catch {
+        return { valid: false, images: [], error: 'Malformed base64 image data.' };
+      }
+
+      // Authoritative magic bytes & polyglot inspection
+      const validation = validateImageBuffer(rawBytes);
+      if (!validation.valid || !validation.mime) {
+        return {
+          valid: false,
+          images: [],
+          error: validation.error || 'Invalid or unsupported image file.',
+        };
+      }
+
+      sanitizedList.push(`data:${validation.mime};base64,${base64Data}`);
+    } else if (img.startsWith('/api/media/')) {
+      // 2. Local Media Asset inspection
+      const mediaMatch = img.match(/^\/api\/media\/([^/?#]+)$/);
+      if (!mediaMatch || !isValidMediaKey(mediaMatch[1])) {
+        return { valid: false, images: [], error: 'Invalid media asset reference.' };
+      }
+      sanitizedList.push(`/api/media/${mediaMatch[1]}`);
+    } else if (img.startsWith('https://') || img.startsWith('http://')) {
+      // 3. Remote URL inspection
+      if (img.length > 2048) {
+        return { valid: false, images: [], error: 'Image URL is too long.' };
+      }
+      try {
+        const parsedUrl = new URL(img);
+        if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
+          return { valid: false, images: [], error: 'Invalid image URL protocol.' };
+        }
+        if (/\.svg($|\?)/i.test(parsedUrl.pathname)) {
+          return {
+            valid: false,
+            images: [],
+            error: 'Disallowed file content: Vector graphics (SVG) are strictly prohibited.',
+          };
+        }
+        sanitizedList.push(img);
+      } catch {
+        return { valid: false, images: [], error: 'Invalid image URL.' };
+      }
+    } else {
+      return {
+        valid: false,
+        images: [],
+        error: 'Invalid image format. Must be an uploaded image, media asset, or valid image URL.',
+      };
+    }
+  }
+
+  return { valid: true, images: sanitizedList };
+}
+

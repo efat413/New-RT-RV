@@ -113,6 +113,9 @@ import {
   CUSTOMER_SESSION_EXPIRATION_SECONDS,
   ADMIN_SESSION_REFRESH_THROTTLE_SECONDS,
   isAdminRole,
+  validatePasswordLength,
+  MIN_PASSWORD_LENGTH,
+  MAX_PASSWORD_LENGTH,
 } from './auth';
 import {
   syncSingleOrderCourierStatus,
@@ -138,6 +141,9 @@ import {
   isValidMediaKey,
   getSafeMediaHeaders,
   MAX_IMAGE_SIZE_BYTES,
+  validateReviewImages,
+  MAX_REVIEW_IMAGES_COUNT,
+  MAX_REVIEW_IMAGE_BYTES,
 } from './imageSecurity';
 
 let activeApiRequest: Request | null = null;
@@ -390,8 +396,19 @@ function jsonResponse(data: any, status = 200, customHeaders: Record<string, str
   });
 }
 
+export const REQUEST_BODY_LIMITS = {
+  AUTH: 16 * 1024, // 16 KB (login, registration, forgot/reset/change password)
+  USER_UPDATE: 32 * 1024, // 32 KB (user management & permissions)
+  ORDER: 64 * 1024, // 64 KB (order creation, items, customer info)
+  SETTINGS: 256 * 1024, // 256 KB (store settings, courier configs, legal policies)
+  REVIEW: 8 * 1024 * 1024, // 8 MB (review comments & up to 5 photos)
+  DEFAULT: 64 * 1024, // 64 KB
+} as const;
+
 /**
- * Centralized safe JSON request body parser.
+ * Centralized safe JSON request body parser with authoritative body size protection.
+ * - Enforces endpoint-appropriate maximum payload size limits to protect against DoS.
+ * - Rejects oversized payloads with HTTP 413 Payload Too Large before expensive processing.
  * - Safely parses incoming JSON request payloads.
  * - Returns { data: parsed, errorResponse: null } on valid JSON (including empty object `{}`).
  * - Returns HTTP 400 Bad Request if the JSON payload is malformed or invalid.
@@ -399,11 +416,94 @@ function jsonResponse(data: any, status = 200, customHeaders: Record<string, str
  * - Ensures parser stack traces or internals are never leaked.
  */
 export async function safeParseJson<T = any>(
-  request: Request
+  request: Request,
+  maxSizeBytes: number = REQUEST_BODY_LIMITS.DEFAULT
 ): Promise<{ data: T; errorResponse: null } | { data: null; errorResponse: Response }> {
+  // 1. Fast Content-Length pre-check
+  const contentLengthHeader = request.headers.get('content-length');
+  if (contentLengthHeader) {
+    const clen = parseInt(contentLengthHeader, 10);
+    if (!isNaN(clen) && clen > maxSizeBytes) {
+      return {
+        data: null,
+        errorResponse: jsonResponse(
+          { success: false, error: 'Request payload exceeds maximum allowed size.' },
+          413
+        ),
+      };
+    }
+  }
+
+  // 2. Read request body with streaming size enforcement
+  let raw = '';
   try {
-    const data = (await request.json()) as T;
-    return { data: (data ?? ({} as T)), errorResponse: null };
+    if (request.body && typeof (request.body as any).getReader === 'function') {
+      const reader = (request.body as ReadableStream<Uint8Array>).getReader();
+      let totalBytes = 0;
+      const chunks: Uint8Array[] = [];
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          totalBytes += value.byteLength;
+          if (totalBytes > maxSizeBytes) {
+            try { await reader.cancel(); } catch {}
+            return {
+              data: null,
+              errorResponse: jsonResponse(
+                { success: false, error: 'Request payload exceeds maximum allowed size.' },
+                413
+              ),
+            };
+          }
+          chunks.push(value);
+        }
+      }
+      const merged = new Uint8Array(totalBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      raw = new TextDecoder().decode(merged);
+    } else {
+      raw = await request.text();
+      if (new TextEncoder().encode(raw).byteLength > maxSizeBytes) {
+        return {
+          data: null,
+          errorResponse: jsonResponse(
+            { success: false, error: 'Request payload exceeds maximum allowed size.' },
+            413
+          ),
+        };
+      }
+    }
+  } catch {
+    return {
+      data: null,
+      errorResponse: jsonResponse(
+        { success: false, error: 'Malformed JSON payload. Please provide valid JSON.' },
+        400
+      ),
+    };
+  }
+
+  if (!raw || !raw.trim()) {
+    return { data: ({} as T), errorResponse: null };
+  }
+
+  try {
+    const data = JSON.parse(raw);
+    if (data === null || typeof data !== 'object') {
+      return {
+        data: null,
+        errorResponse: jsonResponse(
+          { success: false, error: 'Malformed JSON payload. Please provide valid JSON.' },
+          400
+        ),
+      };
+    }
+    return { data: (data as T), errorResponse: null };
   } catch {
     return {
       data: null,
@@ -1579,7 +1679,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
   // AUTHENTICATION ROUTES (Authoritative D1 + PBKDF2)
   // ==========================================
   if (path === '/api/auth/login' && method === 'POST') {
-    const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+    const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.AUTH);
     if (jsonErr) return jsonErr;
 
     try {
@@ -1591,6 +1691,10 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           { success: false, error: 'Email/Username and password are required.' },
           400
         );
+      }
+
+      if (password.length > MAX_PASSWORD_LENGTH) {
+        return jsonResponse({ success: false, error: 'Invalid email/username or password.' }, 401);
       }
 
       // Brute-force rate limit protection (distributed D1 + memory)
@@ -1726,7 +1830,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
   // AUTHENTICATION: PUBLIC CUSTOMER REGISTRATION
   // ==========================================
   if (path === '/api/auth/register' && method === 'POST') {
-    const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+    const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.AUTH);
     if (jsonErr) return jsonErr;
 
     try {
@@ -1777,8 +1881,10 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       if (!email || !email.includes('@')) {
         return jsonResponse({ success: false, error: 'Valid email address is required.' }, 400);
       }
-      if (!password || password.length < 10) {
-        return jsonResponse({ success: false, error: 'Password must be at least 10 characters long.' }, 400);
+
+      const pwCheck = validatePasswordLength(password);
+      if (!pwCheck.valid) {
+        return jsonResponse({ success: false, error: pwCheck.error || 'Password must be between 10 and 128 characters long.' }, 400);
       }
 
       // Security Rule: Public registration cannot claim a reserved super admin email address
@@ -1841,7 +1947,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
   // AUTHENTICATION: FORGOT PASSWORD (Resend Integration & Hashed Reset Tokens)
   // ==========================================
   if (path === '/api/auth/forgot-password' && method === 'POST') {
-    const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+    const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.AUTH);
     if (jsonErr) return jsonErr;
 
     try {
@@ -1985,7 +2091,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
   // AUTHENTICATION: RESET PASSWORD (Token Hash Verification & PBKDF2 Hashing)
   // ==========================================
   if (path === '/api/auth/reset-password' && method === 'POST') {
-    const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+    const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.AUTH);
     if (jsonErr) return jsonErr;
 
     try {
@@ -2004,13 +2110,14 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         );
       }
 
-      if (!newPassword || newPassword.length < 10) {
+      const pwCheck = validatePasswordLength(newPassword);
+      if (!pwCheck.valid) {
         return jsonResponse(
           {
             success: false,
             status: 'INVALID_PASSWORD',
-            message: 'New password must be at least 10 characters long.',
-            error: 'New password must be at least 10 characters long.',
+            message: pwCheck.error || 'New password must be between 10 and 128 characters long.',
+            error: pwCheck.error || 'New password must be between 10 and 128 characters long.',
           },
           400
         );
@@ -2129,15 +2236,16 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
     const { auth, errorResponse } = await requireAuth(request, env);
     if (errorResponse) return errorResponse;
 
-    const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+    const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.AUTH);
     if (jsonErr) return jsonErr;
 
     const newPassword = (body?.newPassword || '').trim();
     const currentPassword = (body?.currentPassword || body?.oldPassword || '').trim();
 
-    if (!newPassword || newPassword.length < 10) {
+    const pwCheck = validatePasswordLength(newPassword);
+    if (!pwCheck.valid) {
       return jsonResponse(
-        { success: false, error: 'New password must be at least 10 characters long.' },
+        { success: false, error: pwCheck.error || 'New password must be between 10 and 128 characters long.' },
         400
       );
     }
@@ -2145,6 +2253,13 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
     if (!currentPassword) {
       return jsonResponse(
         { success: false, error: 'Current password is required to verify your identity.' },
+        400
+      );
+    }
+
+    if (currentPassword.length > MAX_PASSWORD_LENGTH) {
+      return jsonResponse(
+        { success: false, error: 'Current password does not match. Please verify and try again.' },
         400
       );
     }
@@ -3256,7 +3371,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const permErr = requirePermission(auth!, 'settings.manage');
       if (permErr) return permErr;
 
-      const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+      const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.SETTINGS);
       if (jsonErr) return jsonErr;
 
       try {
@@ -3852,12 +3967,28 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           }, 429);
         }
 
-        const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+        const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.REVIEW);
         if (jsonErr) return jsonErr;
 
         const reviewData = body?.review || body;
 
-        const productId = String(reviewData.productId || '').trim();
+        const rawProductId = String(reviewData.productId || '').trim();
+        if (!rawProductId || rawProductId.length > 100) {
+          return jsonResponse({ success: false, error: 'A valid product ID is required.' }, 400);
+        }
+
+        // TASK 3: Verify referenced product exists before creating a review (prevent orphan records)
+        let targetProduct: Product | null = null;
+        if (env.DB) {
+          try {
+            targetProduct = await getProductById(env.DB, rawProductId);
+          } catch {}
+        }
+        if (!targetProduct || (targetProduct as any).status === 'inactive' || (targetProduct as any).isDeleted) {
+          return jsonResponse({ success: false, error: 'Referenced product not found.' }, 404);
+        }
+        const targetProductId = targetProduct.id;
+
         // XSS sanitization: strip script and HTML tags
         const rawAuthor = String(reviewData.authorName || reviewData.author || '').trim();
         const authorName = rawAuthor.replace(/<[^>]*>/g, '').trim();
@@ -3865,16 +3996,8 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         const comment = rawComment.replace(/<[^>]*>/g, '').trim();
         const rating = Math.min(5, Math.max(1, Math.round(Number(reviewData.rating) || 5)));
 
-        // Validate optional photos
-        let images: string[] = [];
-        if (Array.isArray(reviewData.images)) {
-          images = reviewData.images
-            .filter((img: any) => typeof img === 'string' && img.trim().length > 0 && img.length < 5000000)
-            .slice(0, 5);
-        }
-
-        if (!productId || !authorName || !comment) {
-          return jsonResponse({ success: false, error: 'Product, author name, and comment are required.' }, 400);
+        if (!authorName || !comment) {
+          return jsonResponse({ success: false, error: 'Author name and review comment are required.' }, 400);
         }
 
         if (authorName.length < 2 || authorName.length > 60) {
@@ -3885,8 +4008,21 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           return jsonResponse({ success: false, error: 'Review comment must be between 3 and 1000 characters.' }, 400);
         }
 
+        // TASK 2: Validate review image attachments using authoritative image security utility
+        let images: string[] = [];
+        if (reviewData.images !== undefined && reviewData.images !== null) {
+          const imgValidation = validateReviewImages(reviewData.images);
+          if (!imgValidation.valid) {
+            return jsonResponse({
+              success: false,
+              error: imgValidation.error || 'Invalid review image attachment.'
+            }, 400);
+          }
+          images = imgValidation.images;
+        }
+
         // 2. Per-product throttling (max 2 reviews per product per IP per 10 minutes)
-        const prodThrottleKey = `rev-prod:${clientIp}:${productId}`;
+        const prodThrottleKey = `rev-prod:${clientIp}:${targetProductId}`;
         const prodCheck = await checkRateLimit(prodThrottleKey, 2, 600, env.DB);
         if (!prodCheck.allowed) {
           return jsonResponse({
@@ -3899,7 +4035,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         if (env.DB) {
           const dup = await env.DB.prepare(
             'SELECT id FROM reviews WHERE product_id = ? AND comment = ? LIMIT 1'
-          ).bind(productId, comment).first();
+          ).bind(targetProductId, comment).first();
           if (dup) {
             return jsonResponse({
               success: false,
@@ -3914,17 +4050,9 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
 
         // 4. Server-Authoritative verifiedPurchase Verification:
         let isVerifiedPurchase = false;
-        let targetProductId = productId;
 
         if (env.DB) {
           try {
-            try {
-              const prod = await getProductById(env.DB, productId);
-              if (prod) {
-                targetProductId = prod.id;
-              }
-            } catch {}
-
             let authenticatedUserId: string | null = null;
             let authenticatedEmail: string | null = null;
 
@@ -4023,12 +4151,12 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         return jsonResponse({ success: false, error: 'Forbidden: Insufficient permissions to create manual reviews.' }, 403);
       }
 
-      const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+      const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.REVIEW);
       if (jsonErr) return jsonErr;
 
       try {
         const rData = body?.review || body;
-        const productId = String(rData.productId || '').trim();
+        const rawProductId = String(rData.productId || '').trim();
         const rawAuthor = String(rData.authorName || rData.author || 'Store Customer').trim();
         const authorName = rawAuthor.replace(/<[^>]*>/g, '').trim();
         const rawComment = String(rData.comment || '').trim();
@@ -4040,21 +4168,28 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           : 'approved';
         const createdAt = rData.date || rData.createdAt || new Date().toISOString();
 
-        let images: string[] = [];
-        if (Array.isArray(rData.images)) {
-          images = rData.images.filter((img: any) => typeof img === 'string' && img.trim().length > 0).slice(0, 5);
-        }
-
-        if (!productId || !comment) {
+        if (!rawProductId || !comment) {
           return jsonResponse({ success: false, error: 'Target product and review comment are required.' }, 400);
         }
 
-        let targetProductId = productId;
+        let targetProduct: Product | null = null;
         if (env.DB) {
           try {
-            const prod = await getProductById(env.DB, productId);
-            if (prod) targetProductId = prod.id;
+            targetProduct = await getProductById(env.DB, rawProductId);
           } catch {}
+        }
+        if (!targetProduct || (targetProduct as any).status === 'inactive' || (targetProduct as any).isDeleted) {
+          return jsonResponse({ success: false, error: 'Referenced product not found.' }, 404);
+        }
+        const targetProductId = targetProduct.id;
+
+        let images: string[] = [];
+        if (rData.images !== undefined && rData.images !== null) {
+          const imgValidation = validateReviewImages(rData.images);
+          if (!imgValidation.valid) {
+            return jsonResponse({ success: false, error: imgValidation.error || 'Invalid review image attachment.' }, 400);
+          }
+          images = imgValidation.images;
         }
 
         const created = await insertReview(env.DB, {
@@ -4176,7 +4311,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const permErr = requirePermission(auth!, 'user.manage');
       if (permErr) return permErr;
 
-      const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+      const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.USER_UPDATE);
       if (jsonErr) return jsonErr;
 
       try {
@@ -4209,9 +4344,10 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         // Validate password policy if supplied during admin user creation
         if (userData.password) {
           const plainPw = String(userData.password).trim();
-          if (plainPw.length < 10) {
+          const pwCheck = validatePasswordLength(plainPw);
+          if (!pwCheck.valid) {
             return jsonResponse(
-              { success: false, error: 'Password must be at least 10 characters long.' },
+              { success: false, error: pwCheck.error || 'Password must be between 10 and 128 characters long.' },
               400
             );
           }
@@ -4235,7 +4371,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const { auth, errorResponse } = await requireAuth(request, env);
       if (errorResponse) return errorResponse;
 
-      const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+      const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.USER_UPDATE);
       if (jsonErr) return jsonErr;
 
       // Strict Privilege Escalation Protection:
@@ -4367,9 +4503,10 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         // Validate new password policy if password is being updated
         if (updates.password) {
           const plainPw = String(updates.password).trim();
-          if (plainPw.length < 10) {
+          const pwCheck = validatePasswordLength(plainPw);
+          if (!pwCheck.valid) {
             return jsonResponse(
-              { success: false, error: 'New password must be at least 10 characters long.' },
+              { success: false, error: pwCheck.error || 'New password must be between 10 and 128 characters long.' },
               400
             );
           }
@@ -4586,15 +4723,16 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       }
     }
 
-    const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+    const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.AUTH);
     if (jsonErr) return jsonErr;
 
     try {
       const newPassword = (body?.newPassword || body?.password || '').trim();
+      const pwCheck = validatePasswordLength(newPassword);
 
-      if (!newPassword || newPassword.length < 10) {
+      if (!pwCheck.valid) {
         return jsonResponse(
-          { success: false, error: 'New password must be at least 10 characters long.' },
+          { success: false, error: pwCheck.error || 'New password must be between 10 and 128 characters long.' },
           400
         );
       }
@@ -4704,7 +4842,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         );
       }
 
-      const { data: body, errorResponse: jsonErr } = await safeParseJson(request);
+      const { data: body, errorResponse: jsonErr } = await safeParseJson(request, REQUEST_BODY_LIMITS.ORDER);
       if (jsonErr) {
         await rollbackOrderRateLimit(clientIp, env.DB);
         return jsonErr;
@@ -5221,7 +5359,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const { auth, errorResponse } = await requireAuth(request, env);
       if (errorResponse) return errorResponse;
 
-      const { data: body, errorResponse: jsonErr } = await safeParseJson<{ updates?: Partial<Order> } & Partial<Order>>(request);
+      const { data: body, errorResponse: jsonErr } = await safeParseJson<{ updates?: Partial<Order> } & Partial<Order>>(request, REQUEST_BODY_LIMITS.ORDER);
       if (jsonErr) return jsonErr;
 
       try {
