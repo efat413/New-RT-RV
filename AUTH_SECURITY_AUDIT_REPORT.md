@@ -207,5 +207,5 @@ The following architectural security controls were re-verified and remain robust
 ### Items Requiring Production Verification (NEEDS LIVE VERIFICATION)
 1. **Environment Variables & Secrets:** Confirm `ADMIN_SECRET`, `COURIER_WEBHOOK_SECRET`, `SUPER_ADMIN_EMAILS`, and `RESEND_API_KEY` are configured as Cloudflare Worker Secrets in production.
 2. **Resend Domain Verification:** Verify that `RESEND_FROM_EMAIL` has active SPF, DKIM, and DMARC DNS records configured on the sending domain.
-3. **Database Migration Verification:** Ensure all 20 D1 migrations (`0001` through `0020_advance_payment.sql`) have been applied to the production Cloudflare D1 instance via `npx wrangler d1 migrations apply rongdhonu-db --remote`.
+3. **Database Migration Verification:** Ensure all 21 D1 migrations (`0001` through `0021_upgrade_review_system.sql`) have been applied to the production Cloudflare D1 instance via `npx wrangler d1 migrations apply rongdhonu-db --remote`.
 4. **Live Courier Inbound Webhooks:** Validate HMAC-SHA256 signature processing against live Steadfast webhook transmissions.

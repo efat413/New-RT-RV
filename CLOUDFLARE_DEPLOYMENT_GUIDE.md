@@ -3,7 +3,7 @@
 All necessary production files for your website and Cloudflare D1 integration have been prepared and tested.
 
 ## 🗄️ Cloudflare Configuration
-- **Worker Name**: `rongdhonutrade` (matches Cloudflare Workers Builds CI)
+- **Worker Name**: `rongdhonutrade` (matches `wrangler.json` and Cloudflare Workers Builds CI)
 - **Database Name**: `rongdhonu-db`
 - **Database ID**: `3276795d-5593-42c0-8e14-947f3ab1172b`
 - **Binding Name**: `DB` (accessed via `env.DB`)
@@ -15,7 +15,7 @@ All shared e-commerce data (Products, Categories, Orders, Stock, Sliders, and St
 ## 🚀 How to Deploy & Apply D1 Database Migrations
 
 ### Step 1: Apply D1 Migrations to Production Database
-Run the official Cloudflare D1 migrations command to create all tables (`products`, `categories`, `orders`, `sliders`, `store_settings`, `coupons`, `reviews`, `users`) and seed the initial catalog idempotently:
+Run the official Cloudflare D1 migrations command to create all tables (`products`, `categories`, `orders`, `sliders`, `store_settings`, `coupons`, `reviews`, `users`) and seed the initial catalog idempotently across all 21 migrations:
 
 ```bash
 # Apply migrations to the production Cloudflare D1 database:
@@ -26,10 +26,10 @@ npm run d1:migrate
 ```
 
 ### Step 2: Build & Deploy
-#### Option A: Automated Git CI (Cloudflare Workers Builds)
-1. Commit and push this repository to your connected GitHub/GitLab repository.
-2. Cloudflare Workers Builds automatically builds (`npm run build`) and deploys the Worker named `rt`.
-3. In Cloudflare Dashboard: **Workers & Pages > Overview > rt > Settings > Bindings**:
+#### Option A: Automated Git CI (Cloudflare Workers Builds / GitHub Actions)
+1. Commit and push this repository to your connected GitHub repository (`main` branch).
+2. Automated CI builds (`npm run build`) and deploys the Worker named `rongdhonutrade`.
+3. In Cloudflare Dashboard: **Workers & Pages > Overview > rongdhonutrade > Settings > Bindings**:
    - Ensure D1 Database binding is bound:
      - Variable name: `DB`
      - D1 Database: `rongdhonu-db` (`3276795d-5593-42c0-8e14-947f3ab1172b`)
@@ -39,7 +39,7 @@ npm run d1:migrate
 # 1. Authenticate with your Cloudflare Account:
 npx wrangler login
 
-# 2. Apply migrations to production D1 database:
+# 2. Apply all 21 migrations to production D1 database:
 npx wrangler d1 migrations apply rongdhonu-db --remote
 
 # 3. Build & Deploy Worker:
@@ -50,7 +50,7 @@ npm run deploy
 
 ## 🔍 Troubleshooting: Error 10181 ("database not found")
 If Cloudflare reports `D1 binding 'DB' references database '3276795d-5593-42c0-8e14-947f3ab1172b' which was not found [code: 10181]`:
-1. **Account Isolation**: Cloudflare D1 databases are account-scoped. If you have more than one Cloudflare account (e.g. personal vs company, or multiple email logins), the D1 database `3276795d-5593-42c0-8e14-947f3ab1172b` was created in Account A, but the Worker `rt` / CI Token is deploying to Account B.
+1. **Account Isolation**: Cloudflare D1 databases are account-scoped. If you have more than one Cloudflare account (e.g. personal vs company, or multiple email logins), the D1 database `3276795d-5593-42c0-8e14-947f3ab1172b` was created in Account A, but the Worker `rongdhonutrade` / CI Token is deploying to Account B.
 2. **Resolution**:
    - Run `npx wrangler d1 list` to verify which account ID owns `rongdhonu-db`.
    - Ensure the CI deployment API token (`CLOUDFLARE_API_TOKEN`) or Workers Builds project is created under that exact same Cloudflare account.
@@ -72,7 +72,7 @@ This project is disconnected from your Git account, this may cause deployments t
    - Under **Repository access**, ensure your repository is selected and access is granted. Click **Save**.
 2. **Cloudflare Dashboard Reconnection**:
    - Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) > **Workers & Pages**.
-   - Select your project (`rt`).
+   - Select your project (`rongdhonutrade`).
    - Go to **Settings** > **Builds & deployments** > **Source**.
    - Click **Reconnect** or **Manage Git Connection** and re-link your GitHub repository and default branch (`main`).
    - Go to the **Deployments** tab and click **Retry deployment**.
@@ -115,7 +115,7 @@ npx wrangler secret put COURIER_WEBHOOK_SECRET
 ```
 
 Or via the Cloudflare Dashboard:
-1. Open **Workers & Pages** &rarr; select **rt** &rarr; **Settings** &rarr; **Variables and Secrets**.
+1. Open **Workers & Pages** &rarr; select **rongdhonutrade** &rarr; **Settings** &rarr; **Variables and Secrets**.
 2. Click **Add** under **Environment Variables / Secrets** (select **Secret** type):
    - `ADMIN_SECRET`
    - `STEADFAST_API_KEY`
@@ -143,12 +143,11 @@ Cloudflare Pages and Cloudflare Workers Builds initialize a containerized enviro
 
 1. **Node.js Engine Specification**:
    - Pinned in `package.json` via `"engines": { "node": ">=22.0.0", "npm": ">=10.0.0" }` and `.github/workflows/deploy.yml` via `node-version: '22'`.
-   - Required by `wrangler@4.148.0`, `miniflare@5`, and `@cloudflare/kv-asset-handler` which enforce Node.js `>=22.0.0`.
    - Guarantees compatibility across GitHub Actions and deployment environments.
 
-2. **`package-lock.json`**:
-   - Generated a deterministic dependency tree.
-   - Allows Cloudflare and CI to install packages via `npm ci` without recalculating dependency trees on every build.
+2. **Lockfile Generation for CI/CD Reproducibility**:
+   - If `package-lock.json` is missing from the repository, running `npm ci` in CI/CD will fail.
+   - Run `npm i --package-lock-only` and commit `package-lock.json` to allow Cloudflare and CI to install packages via `npm ci` deterministically.
 
 3. **`.npmrc` (CI Build Optimization)**:
    - Configured with `progress=false`, `audit=false`, `fund=false`, and `prefer-offline=true`.
@@ -156,6 +155,3 @@ Cloudflare Pages and Cloudflare Workers Builds initialize a containerized enviro
 
 4. **`wrangler.json` Build Scope**:
    - Configured `"build.watch_dir": "src"` to prevent unnecessary triggers and isolate build monitoring to the application source code.
-
-
-
