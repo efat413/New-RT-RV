@@ -5,7 +5,7 @@ const BASE_URL = 'http://127.0.0.1:3000';
 async function runVerification() {
   console.log('--- STARTING PASSWORD SECURITY VERIFICATION SUITE ---');
 
-  // Test 1: Customer Registration Validation
+  // Test 1: Customer Registration Validation (7 chars rejected, exactly 8 accepted)
   console.log('\n[1] Testing Registration Validation:');
   const regShortRes = await fetch(`${BASE_URL}/api/auth/register`, {
     method: 'POST',
@@ -13,14 +13,32 @@ async function runVerification() {
     body: JSON.stringify({
       name: 'Short Pw User',
       email: `shortpw-${Date.now()}@example.com`,
-      password: '12345678', // 8 chars (less than 10)
+      password: '1234567', // 7 chars (less than 8)
     }),
   });
   const regShortData = await regShortRes.json();
   console.log('Short registration response:', regShortRes.status, regShortData);
-  assert.strictEqual(regShortRes.status, 400, 'Registration with < 10 chars must return 400');
-  assert.strictEqual(regShortData.error, 'Password must be at least 10 characters long.');
-  console.log('✅ Registration correctly rejected password shorter than 10 characters');
+  assert.strictEqual(regShortRes.status, 400, 'Registration with < 8 chars must return 400');
+  assert.strictEqual(regShortData.error, 'Password must be at least 8 characters long.');
+  console.log('✅ Registration correctly rejected password shorter than 8 characters (7 chars rejected)');
+
+  // Test 1b: Exactly 8 characters accepted
+  const exact8Email = `exact8-${Date.now()}@example.com`;
+  const exact8Password = '12345678'; // exactly 8 chars
+  const reg8Res = await fetch(`${BASE_URL}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Exact 8 User',
+      email: exact8Email,
+      password: exact8Password,
+    }),
+  });
+  const reg8Data = await reg8Res.json();
+  console.log('Exact 8 chars registration response:', reg8Res.status, reg8Data.success);
+  assert.strictEqual(reg8Res.status, 201, 'Registration with exactly 8 chars must succeed with 201');
+  assert.strictEqual(reg8Data.success, true);
+  console.log('✅ Registration succeeded with exactly 8 characters');
 
   const validTestEmail = `validpw-${Date.now()}@example.com`;
   const validTestPassword = 'SecurePassword2026!';
@@ -35,9 +53,9 @@ async function runVerification() {
   });
   const regValidData = await regValidRes.json();
   console.log('Valid registration response:', regValidRes.status, regValidData.success);
-  assert.strictEqual(regValidRes.status, 201, 'Registration with >= 10 chars must succeed with 201');
+  assert.strictEqual(regValidRes.status, 201, 'Registration with >= 8 chars must succeed with 201');
   assert.strictEqual(regValidData.success, true);
-  console.log('✅ Registration succeeded with >= 10 characters');
+  console.log('✅ Registration succeeded with >= 8 characters');
 
   // Test 2: Login with the newly registered user
   console.log('\n[2] Testing Login with newly registered user:');
@@ -55,7 +73,7 @@ async function runVerification() {
   const newUserToken = loginNewData.token;
   console.log('✅ New account logged in successfully');
 
-  // Test 3: Password Change for logged-in user
+  // Test 3: Password Change for logged-in user (7 chars rejected, 8+ accepted)
   console.log('\n[3] Testing Password Change for logged-in user:');
   const changeShortRes = await fetch(`${BASE_URL}/api/auth/change-password`, {
     method: 'POST',
@@ -70,9 +88,9 @@ async function runVerification() {
   });
   const changeShortData = await changeShortRes.json();
   console.log('Short password change response:', changeShortRes.status, changeShortData);
-  assert.strictEqual(changeShortRes.status, 400, 'Password change with < 10 chars must return 400');
-  assert.strictEqual(changeShortData.error, 'New password must be at least 10 characters long.');
-  console.log('✅ Password change correctly rejected password shorter than 10 characters');
+  assert.strictEqual(changeShortRes.status, 400, 'Password change with < 8 chars must return 400');
+  assert.strictEqual(changeShortData.error, 'New password must be at least 8 characters long.');
+  console.log('✅ Password change correctly rejected password shorter than 8 characters');
 
   const updatedPassword = 'NewSuperStrongPassword2026!';
   const changeValidRes = await fetch(`${BASE_URL}/api/auth/change-password`, {
@@ -87,9 +105,9 @@ async function runVerification() {
     }),
   });
   const changeValidData = await changeValidRes.json();
-  assert.strictEqual(changeValidRes.status, 200, 'Password change with >= 10 chars must return 200');
+  assert.strictEqual(changeValidRes.status, 200, 'Password change with >= 8 chars must return 200');
   assert.strictEqual(changeValidData.success, true);
-  console.log('✅ Password change succeeded with >= 10 characters');
+  console.log('✅ Password change succeeded with >= 8 characters');
 
   // Verify login with updated password
   const loginUpdatedRes = await fetch(`${BASE_URL}/api/auth/login`, {
@@ -119,8 +137,8 @@ async function runVerification() {
   console.log('Short reset password response:', resetShortRes.status, resetShortData);
   assert.strictEqual(resetShortRes.status, 400);
   assert.strictEqual(resetShortData.status, 'INVALID_PASSWORD');
-  assert.strictEqual(resetShortData.message, 'New password must be at least 10 characters long.');
-  console.log('✅ Password reset correctly rejected new password shorter than 10 characters');
+  assert.strictEqual(resetShortData.message, 'New password must be at least 8 characters long.');
+  console.log('✅ Password reset correctly rejected new password shorter than 8 characters');
 
   // Test 5: Admin Login and Admin Account Operations
   console.log('\n[5] Testing Super Admin Login and Operations:');
@@ -137,7 +155,7 @@ async function runVerification() {
   const adminToken = adminLoginData.token;
   console.log('✅ Admin login succeeded (preserving existing admin credentials)');
 
-  // Test 6: Admin creating a user account with short password
+  // Test 6: Admin creating a user account with short password (<8 chars)
   console.log('\n[6] Testing Admin Account Creation with Password:');
   const adminCreateShortRes = await fetch(`${BASE_URL}/api/users`, {
     method: 'POST',
@@ -148,17 +166,17 @@ async function runVerification() {
     body: JSON.stringify({
       name: 'Staff With Short Password',
       email: `staff-short-${Date.now()}@example.com`,
-      password: 'short-pw', // 8 chars
+      password: 'short-p', // 7 chars
       role: 'sub_admin',
     }),
   });
   const adminCreateShortData = await adminCreateShortRes.json();
   console.log('Admin create short pw response:', adminCreateShortRes.status, adminCreateShortData);
   assert.strictEqual(adminCreateShortRes.status, 400, 'Admin account creation with short password must return 400');
-  assert.strictEqual(adminCreateShortData.error, 'Password must be at least 10 characters long.');
-  console.log('✅ Admin user creation correctly rejected password shorter than 10 characters');
+  assert.strictEqual(adminCreateShortData.error, 'Password must be at least 8 characters long.');
+  console.log('✅ Admin user creation correctly rejected password shorter than 8 characters');
 
-  // Test 7: Admin creating user account with valid >= 10 char password
+  // Test 7: Admin creating user account with valid >= 8 char password
   const staffEmail = `staff-valid-${Date.now()}@example.com`;
   const staffPassword = 'StaffMasterPassword2026!';
   const adminCreateValidRes = await fetch(`${BASE_URL}/api/users`, {
@@ -178,9 +196,9 @@ async function runVerification() {
   assert.strictEqual(adminCreateValidRes.status, 201, 'Admin account creation with valid password must return 201');
   assert.strictEqual(adminCreateValidData.success, true);
   const createdStaffId = adminCreateValidData.user.id;
-  console.log('✅ Admin user creation succeeded with >= 10 characters password');
+  console.log('✅ Admin user creation succeeded with >= 8 characters password');
 
-  // Test 8: Admin resetting user password
+  // Test 8: Admin resetting user password (<8 chars rejected, >=8 accepted)
   console.log('\n[8] Testing Admin Resetting User Password:');
   const adminResetShortRes = await fetch(`${BASE_URL}/api/users/${encodeURIComponent(createdStaffId)}/reset-password`, {
     method: 'POST',
@@ -195,8 +213,8 @@ async function runVerification() {
   const adminResetShortData = await adminResetShortRes.json();
   console.log('Admin reset short pw response:', adminResetShortRes.status, adminResetShortData);
   assert.strictEqual(adminResetShortRes.status, 400);
-  assert.strictEqual(adminResetShortData.error, 'New password must be at least 10 characters long.');
-  console.log('✅ Admin user password reset correctly rejected password shorter than 10 characters');
+  assert.strictEqual(adminResetShortData.error, 'New password must be at least 8 characters long.');
+  console.log('✅ Admin user password reset correctly rejected password shorter than 8 characters');
 
   const staffResetPassword = 'StaffResetSecurePassword2026!';
   const adminResetValidRes = await fetch(`${BASE_URL}/api/users/${encodeURIComponent(createdStaffId)}/reset-password`, {
@@ -212,7 +230,7 @@ async function runVerification() {
   const adminResetValidData = await adminResetValidRes.json();
   assert.strictEqual(adminResetValidRes.status, 200);
   assert.strictEqual(adminResetValidData.success, true);
-  console.log('✅ Admin user password reset succeeded with >= 10 characters password');
+  console.log('✅ Admin user password reset succeeded with >= 8 characters password');
 
   console.log('\n--- ALL PASSWORD SECURITY VERIFICATIONS PASSED SUCCESSFULLY ---');
 }

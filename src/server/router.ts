@@ -1884,7 +1884,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
 
       const pwCheck = validatePasswordLength(password);
       if (!pwCheck.valid) {
-        return jsonResponse({ success: false, error: pwCheck.error || 'Password must be between 10 and 128 characters long.' }, 400);
+        return jsonResponse({ success: false, error: pwCheck.error || 'Password must be between 8 and 128 characters long.' }, 400);
       }
 
       // Security Rule: Public registration cannot claim a reserved super admin email address
@@ -2116,8 +2116,8 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           {
             success: false,
             status: 'INVALID_PASSWORD',
-            message: pwCheck.error || 'New password must be between 10 and 128 characters long.',
-            error: pwCheck.error || 'New password must be between 10 and 128 characters long.',
+            message: pwCheck.error || 'New password must be between 8 and 128 characters long.',
+            error: pwCheck.error || 'New password must be between 8 and 128 characters long.',
           },
           400
         );
@@ -2245,7 +2245,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
     const pwCheck = validatePasswordLength(newPassword);
     if (!pwCheck.valid) {
       return jsonResponse(
-        { success: false, error: pwCheck.error || 'New password must be between 10 and 128 characters long.' },
+        { success: false, error: pwCheck.error || 'New password must be between 8 and 128 characters long.' },
         400
       );
     }
@@ -4389,7 +4389,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           const pwCheck = validatePasswordLength(plainPw);
           if (!pwCheck.valid) {
             return jsonResponse(
-              { success: false, error: pwCheck.error || 'Password must be between 10 and 128 characters long.' },
+              { success: false, error: pwCheck.error || 'Password must be between 8 and 128 characters long.' },
               400
             );
           }
@@ -4548,7 +4548,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           const pwCheck = validatePasswordLength(plainPw);
           if (!pwCheck.valid) {
             return jsonResponse(
-              { success: false, error: pwCheck.error || 'New password must be between 10 and 128 characters long.' },
+              { success: false, error: pwCheck.error || 'New password must be between 8 and 128 characters long.' },
               400
             );
           }
@@ -4774,7 +4774,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
 
       if (!pwCheck.valid) {
         return jsonResponse(
-          { success: false, error: pwCheck.error || 'New password must be between 10 and 128 characters long.' },
+          { success: false, error: pwCheck.error || 'New password must be between 8 and 128 characters long.' },
           400
         );
       }

@@ -89,7 +89,7 @@ export async function resolveAuthSecret(env?: { ADMIN_SECRET?: string; JWT_SECRE
 export const PBKDF2_RECOMMENDED_ITERATIONS = 600000;
 export const PBKDF2_LEGACY_ITERATIONS = 100000;
 
-export const MIN_PASSWORD_LENGTH = 10;
+export const MIN_PASSWORD_LENGTH = 8;
 export const MAX_PASSWORD_LENGTH = 128;
 
 /**
