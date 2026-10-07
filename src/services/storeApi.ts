@@ -665,7 +665,7 @@ export const couponsApi = {
 // ==========================================
 export const reviewsApi = {
   async getAll(
-    params?: string | { productId?: string; sortBy?: string; rating?: number }
+    params?: string | { productId?: string; sortBy?: string; rating?: number; page?: number; limit?: number }
   ): Promise<ProductReview[]> {
     const url = new URL(`${API_BASE}/reviews`, window.location.origin);
     if (typeof params === 'string') {
@@ -674,11 +674,37 @@ export const reviewsApi = {
       if (params.productId) url.searchParams.set('productId', params.productId);
       if (params.sortBy) url.searchParams.set('sortBy', params.sortBy);
       if (params.rating !== undefined) url.searchParams.set('rating', String(params.rating));
+      if (params.page !== undefined) url.searchParams.set('page', String(params.page));
+      if (params.limit !== undefined) url.searchParams.set('limit', String(params.limit));
     }
 
-    const res = await apiRequest<{ success: boolean; reviews: ProductReview[] }>(url.toString());
+    const res = await apiRequest<{ success: boolean; reviews: ProductReview[]; count?: number; total?: number; page?: number; limit?: number; totalPages?: number }>(url.toString());
     if (res.success && res.data && Array.isArray(res.data.reviews)) {
       return res.data.reviews;
+    }
+    throw new Error(res.error || 'Failed to fetch reviews. Please try again.');
+  },
+
+  async getPaginated(
+    params?: { productId?: string; sortBy?: string; rating?: number; page?: number; limit?: number }
+  ): Promise<{ reviews: ProductReview[]; count: number; total: number; page: number; limit: number; totalPages: number }> {
+    const url = new URL(`${API_BASE}/reviews`, window.location.origin);
+    if (params?.productId) url.searchParams.set('productId', params.productId);
+    if (params?.sortBy) url.searchParams.set('sortBy', params.sortBy);
+    if (params?.rating !== undefined) url.searchParams.set('rating', String(params.rating));
+    if (params?.page !== undefined) url.searchParams.set('page', String(params.page));
+    if (params?.limit !== undefined) url.searchParams.set('limit', String(params.limit));
+
+    const res = await apiRequest<{ success: boolean; reviews: ProductReview[]; count?: number; total?: number; page?: number; limit?: number; totalPages?: number }>(url.toString());
+    if (res.success && res.data && Array.isArray(res.data.reviews)) {
+      return {
+        reviews: res.data.reviews,
+        count: res.data.count ?? res.data.reviews.length,
+        total: res.data.total ?? res.data.reviews.length,
+        page: res.data.page ?? 1,
+        limit: res.data.limit ?? 20,
+        totalPages: res.data.totalPages ?? 1,
+      };
     }
     throw new Error(res.error || 'Failed to fetch reviews. Please try again.');
   },
@@ -689,6 +715,8 @@ export const reviewsApi = {
     search?: string;
     rating?: number;
     sortBy?: string;
+    page?: number;
+    limit?: number;
   }): Promise<ProductReview[]> {
     const url = new URL(`${API_BASE}/admin/reviews`, window.location.origin);
     if (params?.productId) url.searchParams.set('productId', params.productId);
@@ -696,10 +724,44 @@ export const reviewsApi = {
     if (params?.search) url.searchParams.set('search', params.search);
     if (params?.rating !== undefined) url.searchParams.set('rating', String(params.rating));
     if (params?.sortBy) url.searchParams.set('sortBy', params.sortBy);
+    if (params?.page !== undefined) url.searchParams.set('page', String(params.page));
+    if (params?.limit !== undefined) url.searchParams.set('limit', String(params.limit));
 
-    const res = await apiRequest<{ success: boolean; reviews: ProductReview[] }>(url.toString());
+    const res = await apiRequest<{ success: boolean; reviews: ProductReview[]; count?: number; total?: number; page?: number; limit?: number; totalPages?: number }>(url.toString());
     if (res.success && res.data && Array.isArray(res.data.reviews)) {
       return res.data.reviews;
+    }
+    throw new Error(res.error || 'Failed to fetch admin reviews.');
+  },
+
+  async getAdminReviewsPaginated(params?: {
+    productId?: string;
+    status?: string;
+    search?: string;
+    rating?: number;
+    sortBy?: string;
+    page?: number;
+    limit?: number;
+  }): Promise<{ reviews: ProductReview[]; count: number; total: number; page: number; limit: number; totalPages: number }> {
+    const url = new URL(`${API_BASE}/admin/reviews`, window.location.origin);
+    if (params?.productId) url.searchParams.set('productId', params.productId);
+    if (params?.status) url.searchParams.set('status', params.status);
+    if (params?.search) url.searchParams.set('search', params.search);
+    if (params?.rating !== undefined) url.searchParams.set('rating', String(params.rating));
+    if (params?.sortBy) url.searchParams.set('sortBy', params.sortBy);
+    if (params?.page !== undefined) url.searchParams.set('page', String(params.page));
+    if (params?.limit !== undefined) url.searchParams.set('limit', String(params.limit));
+
+    const res = await apiRequest<{ success: boolean; reviews: ProductReview[]; count?: number; total?: number; page?: number; limit?: number; totalPages?: number }>(url.toString());
+    if (res.success && res.data && Array.isArray(res.data.reviews)) {
+      return {
+        reviews: res.data.reviews,
+        count: res.data.count ?? res.data.reviews.length,
+        total: res.data.total ?? res.data.reviews.length,
+        page: res.data.page ?? 1,
+        limit: res.data.limit ?? 50,
+        totalPages: res.data.totalPages ?? 1,
+      };
     }
     throw new Error(res.error || 'Failed to fetch admin reviews.');
   },

@@ -2725,17 +2725,31 @@ export function rowToReview(row: any): ProductReview {
   };
 }
 
+export interface GetAllReviewsOptions {
+  productId?: string;
+  status?: string;
+  sortBy?: string;
+  rating?: number;
+  search?: string;
+  includeAllStatuses?: boolean;
+  page?: number;
+  limit?: number;
+  defaultLimit?: number;
+  maxLimit?: number;
+}
+
+export type PaginatedReviewsResult = ProductReview[] & {
+  reviews: ProductReview[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+};
+
 export async function getAllReviews(
   db: D1Database,
-  options?: string | {
-    productId?: string;
-    status?: string;
-    sortBy?: string;
-    rating?: number;
-    search?: string;
-    includeAllStatuses?: boolean;
-  }
-): Promise<ProductReview[]> {
+  options?: string | GetAllReviewsOptions
+): Promise<PaginatedReviewsResult> {
   const isStringArg = typeof options === 'string';
   const productId = isStringArg ? options : options?.productId;
   const status = !isStringArg ? options?.status : undefined;
@@ -2744,7 +2758,19 @@ export async function getAllReviews(
   const search = !isStringArg ? options?.search : undefined;
   const includeAllStatuses = !isStringArg ? Boolean(options?.includeAllStatuses) : false;
 
-  let query = 'SELECT * FROM reviews';
+  // Safe pagination limits: server enforced
+  const defaultLimit = !isStringArg && options?.defaultLimit ? Math.max(1, Number(options.defaultLimit)) : 20;
+  const maxLimit = !isStringArg && options?.maxLimit ? Math.max(1, Number(options.maxLimit)) : 50;
+
+  let page = !isStringArg && options?.page !== undefined ? Number(options.page) : 1;
+  if (isNaN(page) || page < 1) page = 1;
+
+  let limit = !isStringArg && options?.limit !== undefined ? Number(options.limit) : defaultLimit;
+  if (isNaN(limit) || limit < 1) limit = defaultLimit;
+  if (limit > maxLimit) limit = maxLimit;
+
+  const offset = (page - 1) * limit;
+
   const whereClauses: string[] = [];
   const bindings: any[] = [];
 
@@ -2773,25 +2799,57 @@ export async function getAllReviews(
     }
   }
 
-  if (whereClauses.length > 0) {
-    query += ` WHERE ${whereClauses.join(' AND ')}`;
-  }
+  const whereClause = whereClauses.length > 0 ? ` WHERE ${whereClauses.join(' AND ')}` : '';
 
+  // Deterministic ordering: always include id as secondary tie-breaker
+  let orderClause = ' ORDER BY created_at DESC, id DESC';
   if (sortBy === 'oldest') {
-    query += ' ORDER BY created_at ASC';
+    orderClause = ' ORDER BY created_at ASC, id ASC';
   } else if (sortBy === 'highest') {
-    query += ' ORDER BY rating DESC, created_at DESC';
+    orderClause = ' ORDER BY rating DESC, created_at DESC, id DESC';
   } else if (sortBy === 'lowest') {
-    query += ' ORDER BY rating ASC, created_at DESC';
-  } else {
-    query += ' ORDER BY created_at DESC';
+    orderClause = ' ORDER BY rating ASC, created_at DESC, id DESC';
   }
 
-  const stmt = db.prepare(query);
-  const bound = bindings.length > 0 ? stmt.bind(...bindings) : stmt;
-  const result = await bound.all<any>();
+  // 1. Prepare COUNT statement with identical WHERE clause
+  const countQuery = `SELECT COUNT(*) as total FROM reviews${whereClause}`;
+  const countStmt = db.prepare(countQuery);
+  const boundCount = bindings.length > 0 ? countStmt.bind(...bindings) : countStmt;
 
-  return (result.results || []).map(rowToReview);
+  // 2. Prepare DATA statement bounded with parameterized LIMIT & OFFSET
+  const dataQuery = `SELECT * FROM reviews${whereClause}${orderClause} LIMIT ? OFFSET ?`;
+  const dataStmt = db.prepare(dataQuery);
+  const boundData = dataStmt.bind(...bindings, limit, offset);
+
+  let total = 0;
+  let rows: any[] = [];
+
+  if (typeof db.batch === 'function') {
+    const batchRes = await db.batch<any>([boundCount, boundData]);
+    const countRow = batchRes[0]?.results?.[0] || batchRes[0];
+    total = Number(countRow?.total ?? 0);
+    rows = batchRes[1]?.results || [];
+  } else {
+    const [countResult, dataResult] = await Promise.all([
+      boundCount.first<{ total: number }>(),
+      boundData.all<any>(),
+    ]);
+    total = Number(countResult?.total ?? 0);
+    rows = dataResult?.results || [];
+  }
+
+  const reviews = rows.map(rowToReview);
+  const totalPages = Math.ceil(total / limit) || 1;
+
+  // Hybrid array + pagination result object for backward and forward compatibility
+  const result: any = [...reviews];
+  result.reviews = reviews;
+  result.total = total;
+  result.page = page;
+  result.limit = limit;
+  result.totalPages = totalPages;
+
+  return result;
 }
 
 export async function getReviewById(db: D1Database, id: string): Promise<ProductReview | null> {

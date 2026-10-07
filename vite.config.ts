@@ -3372,6 +3372,15 @@ function localApiDevPlugin(): Plugin {
             const ratingParam = url.searchParams.get('rating');
             const rating = ratingParam ? parseInt(ratingParam, 10) : undefined;
 
+            // Safe server-side pagination: default 20, max 50, min page 1
+            let page = parseInt(String(url.searchParams.get('page') || '1'), 10);
+            if (isNaN(page) || page < 1) page = 1;
+
+            let rawLimit = url.searchParams.get('limit');
+            let limit = rawLimit ? parseInt(String(rawLimit), 10) : 20;
+            if (isNaN(limit) || limit < 1) limit = 20;
+            if (limit > 50) limit = 50;
+
             let filteredReviews = devReviews.filter((r) => !r.status || r.status === 'approved');
             if (productId) {
               filteredReviews = filteredReviews.filter((r) => r.productId === productId);
@@ -3381,19 +3390,48 @@ function localApiDevPlugin(): Plugin {
             }
 
             if (sortBy === 'oldest') {
-              filteredReviews.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+              filteredReviews.sort((a, b) => {
+                const diff = new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+                return diff !== 0 ? diff : String(a.id || '').localeCompare(String(b.id || ''));
+              });
             } else if (sortBy === 'highest') {
-              filteredReviews.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+              filteredReviews.sort((a, b) => {
+                const diff = (b.rating || 0) - (a.rating || 0);
+                if (diff !== 0) return diff;
+                const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+                return timeDiff !== 0 ? timeDiff : String(b.id || '').localeCompare(String(a.id || ''));
+              });
             } else if (sortBy === 'lowest') {
-              filteredReviews.sort((a, b) => (a.rating || 0) - (b.rating || 0));
+              filteredReviews.sort((a, b) => {
+                const diff = (a.rating || 0) - (b.rating || 0);
+                if (diff !== 0) return diff;
+                const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+                return timeDiff !== 0 ? timeDiff : String(b.id || '').localeCompare(String(a.id || ''));
+              });
             } else {
-              filteredReviews.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+              filteredReviews.sort((a, b) => {
+                const diff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+                return diff !== 0 ? diff : String(b.id || '').localeCompare(String(a.id || ''));
+              });
             }
+
+            const total = filteredReviews.length;
+            const totalPages = Math.ceil(total / limit) || 1;
+            const offset = (page - 1) * limit;
+            const paginatedReviews = filteredReviews.slice(offset, offset + limit);
 
             res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60, stale-while-revalidate=30');
             res.setHeader('Vary', 'Origin');
             res.statusCode = 200;
-            return res.end(JSON.stringify({ success: true, count: filteredReviews.length, reviews: filteredReviews }));
+            return res.end(JSON.stringify({
+              success: true,
+              count: paginatedReviews.length,
+              total,
+              page,
+              limit,
+              totalPages,
+              reviews: paginatedReviews,
+            }));
           }
 
           if (method === 'POST') {
@@ -3560,6 +3598,15 @@ function localApiDevPlugin(): Plugin {
             const rating = ratingParam ? parseInt(ratingParam, 10) : undefined;
             const sortBy = url.searchParams.get('sortBy') || undefined;
 
+            // Admin safe server-side pagination: default 50, max 100, min page 1
+            let page = parseInt(String(url.searchParams.get('page') || '1'), 10);
+            if (isNaN(page) || page < 1) page = 1;
+
+            let rawLimit = url.searchParams.get('limit');
+            let limit = rawLimit ? parseInt(String(rawLimit), 10) : 50;
+            if (isNaN(limit) || limit < 1) limit = 50;
+            if (limit > 100) limit = 100;
+
             let results = [...devReviews];
             if (productId) results = results.filter((r) => r.productId === productId);
             if (status && status !== 'all') results = results.filter((r) => r.status === status);
@@ -3572,17 +3619,46 @@ function localApiDevPlugin(): Plugin {
             }
 
             if (sortBy === 'oldest') {
-              results.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+              results.sort((a, b) => {
+                const diff = new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+                return diff !== 0 ? diff : String(a.id || '').localeCompare(String(b.id || ''));
+              });
             } else if (sortBy === 'highest') {
-              results.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+              results.sort((a, b) => {
+                const diff = (b.rating || 0) - (a.rating || 0);
+                if (diff !== 0) return diff;
+                const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+                return timeDiff !== 0 ? timeDiff : String(b.id || '').localeCompare(String(a.id || ''));
+              });
             } else if (sortBy === 'lowest') {
-              results.sort((a, b) => (a.rating || 0) - (b.rating || 0));
+              results.sort((a, b) => {
+                const diff = (a.rating || 0) - (b.rating || 0);
+                if (diff !== 0) return diff;
+                const timeDiff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+                return timeDiff !== 0 ? timeDiff : String(b.id || '').localeCompare(String(a.id || ''));
+              });
             } else {
-              results.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+              results.sort((a, b) => {
+                const diff = new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+                return diff !== 0 ? diff : String(b.id || '').localeCompare(String(a.id || ''));
+              });
             }
 
+            const total = results.length;
+            const totalPages = Math.ceil(total / limit) || 1;
+            const offset = (page - 1) * limit;
+            const paginatedReviews = results.slice(offset, offset + limit);
+
             res.statusCode = 200;
-            return res.end(JSON.stringify({ success: true, count: results.length, reviews: results }));
+            return res.end(JSON.stringify({
+              success: true,
+              count: paginatedReviews.length,
+              total,
+              page,
+              limit,
+              totalPages,
+              reviews: paginatedReviews,
+            }));
           }
 
           if (method === 'POST') {

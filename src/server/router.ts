@@ -3933,16 +3933,37 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         const ratingParam = url.searchParams.get('rating');
         const rating = ratingParam ? parseInt(ratingParam, 10) : undefined;
 
+        // Safe server-side pagination: default 20, max 50, min page 1
+        let page = parseInt(String(url.searchParams.get('page') || '1'), 10);
+        if (isNaN(page) || page < 1) page = 1;
+
+        let rawLimit = url.searchParams.get('limit');
+        let limit = rawLimit ? parseInt(String(rawLimit), 10) : 20;
+        if (isNaN(limit) || limit < 1) limit = 20;
+        if (limit > 50) limit = 50;
+
         // Public endpoint: strictly approved reviews
-        const reviews = await getAllReviews(env.DB, {
+        const result = await getAllReviews(env.DB, {
           productId,
           status: 'approved',
           sortBy,
           rating,
           includeAllStatuses: false,
+          page,
+          limit,
+          defaultLimit: 20,
+          maxLimit: 50,
         });
 
-        return jsonResponse({ success: true, count: reviews.length, reviews }, 200, {
+        return jsonResponse({
+          success: true,
+          count: result.reviews.length,
+          total: result.total,
+          page: result.page,
+          limit: result.limit,
+          totalPages: result.totalPages,
+          reviews: result.reviews,
+        }, 200, {
           'Cache-Control': 'public, max-age=30, s-maxage=60, stale-while-revalidate=30',
           'Vary': 'Origin, Accept-Encoding',
         });
@@ -4127,16 +4148,37 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         const ratingParam = url.searchParams.get('rating');
         const rating = ratingParam ? parseInt(ratingParam, 10) : undefined;
 
-        const reviews = await getAllReviews(env.DB, {
+        // Admin safe server-side pagination: default 50, max 100, min page 1
+        let page = parseInt(String(url.searchParams.get('page') || '1'), 10);
+        if (isNaN(page) || page < 1) page = 1;
+
+        let rawLimit = url.searchParams.get('limit');
+        let limit = rawLimit ? parseInt(String(rawLimit), 10) : 50;
+        if (isNaN(limit) || limit < 1) limit = 50;
+        if (limit > 100) limit = 100;
+
+        const result = await getAllReviews(env.DB, {
           productId,
           status,
           sortBy,
           search,
           rating,
           includeAllStatuses: !status || status === 'all',
+          page,
+          limit,
+          defaultLimit: 50,
+          maxLimit: 100,
         });
 
-        return jsonResponse({ success: true, count: reviews.length, reviews });
+        return jsonResponse({
+          success: true,
+          count: result.reviews.length,
+          total: result.total,
+          page: result.page,
+          limit: result.limit,
+          totalPages: result.totalPages,
+          reviews: result.reviews,
+        });
       } catch (err: any) {
         console.error('Error in admin reviews fetch:', err);
         return jsonResponse({ success: false, error: 'Internal server error.' }, 500);

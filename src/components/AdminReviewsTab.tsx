@@ -16,6 +16,8 @@ import {
   Images,
   ExternalLink,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   X,
   MessageSquare,
   Sparkles,
@@ -56,6 +58,10 @@ export const AdminReviewsTab: React.FC<AdminReviewsTabProps> = ({
   const [ratingFilter, setRatingFilter] = useState<number | 'all'>('all');
   const [verifiedFilter, setVerifiedFilter] = useState<'all' | 'verified' | 'unverified'>('all');
   const [selectedProductId, setSelectedProductId] = useState<string>(filterProductId || 'all');
+
+  // Pagination State (bounded display)
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(20);
 
   // Modal States
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -159,6 +165,21 @@ export const AdminReviewsTab: React.FC<AdminReviewsTabProps> = ({
       return true;
     });
   }, [reviews, statusFilter, selectedProductId, ratingFilter, verifiedFilter, searchQuery, products]);
+
+  // Reset page when filter criteria change
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [statusFilter, selectedProductId, ratingFilter, verifiedFilter, searchQuery, pageSize]);
+
+  // Pagination bounds & slice
+  const totalItems = filteredReviews.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+
+  const paginatedReviews = useMemo(() => {
+    const startIndex = (safeCurrentPage - 1) * pageSize;
+    return filteredReviews.slice(startIndex, startIndex + pageSize);
+  }, [filteredReviews, safeCurrentPage, pageSize]);
 
   // Product helper lookup
   const getProduct = (productId: string) => {
@@ -479,7 +500,7 @@ export const AdminReviewsTab: React.FC<AdminReviewsTabProps> = ({
             </button>
           </div>
         ) : (
-          filteredReviews.map((rev) => {
+          paginatedReviews.map((rev) => {
             const product = getProduct(rev.productId);
             const currentStatus = rev.status || 'approved';
 
@@ -677,6 +698,78 @@ export const AdminReviewsTab: React.FC<AdminReviewsTabProps> = ({
               </div>
             );
           })
+        )}
+
+        {/* Pagination Bar */}
+        {totalItems > 0 && (
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 sm:p-4 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+            <div className="flex items-center gap-2 font-medium">
+              <span>
+                Showing <strong className="text-slate-900 font-bold">{(safeCurrentPage - 1) * pageSize + 1}</strong> - <strong className="text-slate-900 font-bold">{Math.min(safeCurrentPage * pageSize, totalItems)}</strong> of <strong className="text-slate-900 font-bold">{totalItems}</strong> reviews
+              </span>
+              <span className="text-slate-300">|</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-400">Per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="px-2 py-0.5 rounded-lg border border-slate-200 bg-white font-bold text-slate-700 focus:outline-none cursor-pointer"
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+              </div>
+            </div>
+
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={safeCurrentPage <= 1}
+                  className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white text-slate-700 font-bold flex items-center gap-1 transition-all cursor-pointer disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Prev</span>
+                </button>
+
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, idx) => idx + 1)
+                    .filter((p) => p === 1 || p === totalPages || Math.abs(p - safeCurrentPage) <= 1)
+                    .map((p, idx, arr) => {
+                      const showEllipsis = idx > 0 && p - arr[idx - 1] > 1;
+                      return (
+                        <React.Fragment key={p}>
+                          {showEllipsis && <span className="px-1 text-slate-300">...</span>}
+                          <button
+                            type="button"
+                            onClick={() => setCurrentPage(p)}
+                            className={`min-w-7 h-7 rounded-xl font-bold transition-all cursor-pointer ${
+                              safeCurrentPage === p
+                                ? 'bg-slate-900 text-white shadow-xs'
+                                : 'bg-white border border-slate-200 hover:bg-slate-50 text-slate-700'
+                            }`}
+                          >
+                            {p}
+                          </button>
+                        </React.Fragment>
+                      );
+                    })}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={safeCurrentPage >= totalPages}
+                  className="px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white text-slate-700 font-bold flex items-center gap-1 transition-all cursor-pointer disabled:cursor-not-allowed"
+                >
+                  <span>Next</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
