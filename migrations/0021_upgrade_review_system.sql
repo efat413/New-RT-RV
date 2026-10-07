@@ -11,7 +11,7 @@
 -- 1. Add moderation and media columns to reviews table
 ALTER TABLE reviews ADD COLUMN status TEXT NOT NULL DEFAULT 'approved';
 ALTER TABLE reviews ADD COLUMN images_json TEXT DEFAULT '[]';
-ALTER TABLE reviews ADD COLUMN updated_at TEXT DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE reviews ADD COLUMN updated_at TEXT;
 
 -- 2. Create indexes for public queries, moderation status, and sorting
 CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews(status);

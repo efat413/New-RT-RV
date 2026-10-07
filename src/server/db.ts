@@ -61,8 +61,311 @@ export async function checkTablesExist(db: D1Database): Promise<{ existing: stri
 
 let cachedProductTableColumns: Set<string> | null = null;
 let schemaHealingAttempted = false;
+let coreSchemaInitialized = false;
+
+/**
+ * Ensures all core application tables, indexes, and triggers exist in Cloudflare D1.
+ * Completely idempotent: Uses CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.
+ * Never drops tables or destroys existing production data.
+ */
+export async function ensureCoreSchema(db: D1Database): Promise<void> {
+  if (coreSchemaInitialized) return;
+  try {
+    const res = await db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all<{ name: string }>();
+    const existing = new Set((res.results || []).map((r) => r.name.toLowerCase()));
+
+    const tablesToCreate: string[] = [];
+
+    if (!existing.has('categories')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS categories (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          slug TEXT NOT NULL UNIQUE,
+          icon_name TEXT,
+          description TEXT DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_categories_slug ON categories(slug);
+      `);
+    }
+
+    if (!existing.has('products')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS products (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          price REAL NOT NULL DEFAULT 0,
+          original_price REAL DEFAULT 0,
+          buying_price REAL DEFAULT 0,
+          category_id TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          image_url TEXT NOT NULL DEFAULT '',
+          images_json TEXT NOT NULL DEFAULT '[]',
+          stock INTEGER NOT NULL DEFAULT 0,
+          featured INTEGER NOT NULL DEFAULT 0,
+          featured_sort_order INTEGER DEFAULT 0,
+          rating REAL DEFAULT 5.0,
+          reviews_count INTEGER DEFAULT 0,
+          specs_json TEXT DEFAULT '[]',
+          sizes_json TEXT DEFAULT '[]',
+          colors_json TEXT DEFAULT '[]',
+          sku TEXT,
+          video_url TEXT,
+          slug TEXT UNIQUE,
+          status TEXT DEFAULT 'active',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
+        CREATE INDEX IF NOT EXISTS idx_products_featured ON products(featured);
+        CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at);
+        CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug);
+      `);
+    }
+
+    if (!existing.has('orders')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS orders (
+          id TEXT PRIMARY KEY,
+          order_number TEXT NOT NULL UNIQUE,
+          user_id TEXT,
+          user_email TEXT,
+          customer_name TEXT NOT NULL,
+          customer_phone TEXT NOT NULL,
+          customer_address TEXT NOT NULL,
+          customer_district TEXT,
+          customer_zone TEXT DEFAULT 'inside_dhaka',
+          customer_notes TEXT,
+          items_json TEXT NOT NULL,
+          subtotal REAL NOT NULL DEFAULT 0,
+          delivery_fee REAL NOT NULL DEFAULT 0,
+          total_amount REAL NOT NULL DEFAULT 0,
+          total_cost REAL NOT NULL DEFAULT 0,
+          total_profit REAL NOT NULL DEFAULT 0,
+          coupon_code TEXT,
+          discount_amount REAL DEFAULT 0,
+          payment_method TEXT NOT NULL DEFAULT 'COD',
+          payment_status TEXT NOT NULL DEFAULT 'Pending',
+          transaction_id TEXT,
+          shipping_status TEXT NOT NULL DEFAULT 'Pending',
+          courier_name TEXT,
+          courier_waybill TEXT,
+          consignment_id TEXT,
+          courier_status TEXT,
+          courier_booking_json TEXT,
+          dbbl_details_json TEXT,
+          card_details_json TEXT,
+          last_courier_sync TEXT,
+          advance_payment REAL NOT NULL DEFAULT 0,
+          advance_payment_method TEXT,
+          advance_payment_note TEXT,
+          advance_payment_updated_at TEXT,
+          advance_payment_updated_by TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);
+        CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(customer_phone);
+        CREATE INDEX IF NOT EXISTS idx_orders_shipping_status ON orders(shipping_status);
+        CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
+        CREATE INDEX IF NOT EXISTS idx_orders_advance_payment ON orders(advance_payment);
+      `);
+    }
+
+    if (!existing.has('sliders')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS sliders (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          headline TEXT NOT NULL,
+          subtext TEXT DEFAULT '',
+          tag TEXT DEFAULT '',
+          discount_badge TEXT DEFAULT '',
+          category_id TEXT DEFAULT '',
+          image_url TEXT NOT NULL,
+          accent_gradient TEXT DEFAULT '',
+          button_text TEXT DEFAULT '',
+          sort_order INTEGER DEFAULT 0,
+          is_active INTEGER DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_sliders_sort_order ON sliders(sort_order);
+      `);
+    }
+
+    if (!existing.has('store_settings')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS store_settings (
+          id TEXT PRIMARY KEY DEFAULT 'default',
+          settings_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    }
+
+    if (!existing.has('coupons')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS coupons (
+          code TEXT PRIMARY KEY,
+          discount_type TEXT NOT NULL,
+          discount_value REAL NOT NULL,
+          min_spend REAL DEFAULT 0,
+          description TEXT DEFAULT '',
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    }
+
+    if (!existing.has('reviews')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS reviews (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL,
+          author_name TEXT NOT NULL,
+          rating INTEGER NOT NULL DEFAULT 5,
+          comment TEXT NOT NULL,
+          verified_purchase INTEGER DEFAULT 1,
+          status TEXT NOT NULL DEFAULT 'approved',
+          images_json TEXT DEFAULT '[]',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_reviews_product ON reviews(product_id);
+        CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews(status);
+        CREATE INDEX IF NOT EXISTS idx_reviews_product_status ON reviews(product_id, status);
+      `);
+    }
+
+    if (!existing.has('users')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL UNIQUE,
+          password TEXT,
+          role TEXT NOT NULL DEFAULT 'customer',
+          permissions_json TEXT,
+          phone TEXT,
+          address TEXT,
+          district TEXT,
+          delivery_zone TEXT DEFAULT 'inside_dhaka',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+      `);
+    }
+
+    if (!existing.has('rate_limits')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS rate_limits (
+          key TEXT PRIMARY KEY,
+          count INTEGER NOT NULL DEFAULT 1,
+          reset_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_rate_limits_reset_at ON rate_limits(reset_at);
+      `);
+    }
+
+    if (!existing.has('order_idempotency')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS order_idempotency (
+          key TEXT PRIMARY KEY,
+          order_id TEXT NOT NULL,
+          order_number TEXT NOT NULL,
+          response_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_order_idempotency_created ON order_idempotency(created_at);
+      `);
+    }
+
+    if (!existing.has('product_slug_history')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS product_slug_history (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL,
+          slug TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_product_slug_history_slug ON product_slug_history(slug);
+        CREATE INDEX IF NOT EXISTS idx_product_slug_history_product_id ON product_slug_history(product_id);
+      `);
+    }
+
+    if (!existing.has('expenses')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS expenses (
+          id TEXT PRIMARY KEY,
+          expense_type TEXT NOT NULL,
+          amount REAL NOT NULL DEFAULT 0,
+          date TEXT NOT NULL,
+          note TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          created_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
+      `);
+    }
+
+    if (!existing.has('media_assets')) {
+      tablesToCreate.push(`
+        CREATE TABLE IF NOT EXISTS media_assets (
+          id TEXT PRIMARY KEY,
+          content_type TEXT NOT NULL DEFAULT 'image/jpeg',
+          data TEXT NOT NULL,
+          size INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_media_assets_created ON media_assets(created_at);
+      `);
+    }
+
+    for (const sql of tablesToCreate) {
+      for (const statement of sql.split(';').map((s) => s.trim()).filter(Boolean)) {
+        try {
+          await db.prepare(statement).run();
+        } catch (err) {
+          console.warn('[D1 Core Schema Init Notice]:', err);
+        }
+      }
+    }
+
+    // Engine-level triggers preventing negative stock
+    try {
+      await db.prepare(`
+        CREATE TRIGGER IF NOT EXISTS trg_prevent_negative_stock
+        BEFORE UPDATE OF stock ON products
+        FOR EACH ROW
+        WHEN NEW.stock < 0
+        BEGIN
+          SELECT RAISE(ABORT, 'INSUFFICIENT_STOCK: Product stock cannot be negative');
+        END;
+      `).run();
+      await db.prepare(`
+        CREATE TRIGGER IF NOT EXISTS trg_prevent_negative_stock_insert
+        BEFORE INSERT ON products
+        FOR EACH ROW
+        WHEN NEW.stock < 0
+        BEGIN
+          SELECT RAISE(ABORT, 'INSUFFICIENT_STOCK: Product stock cannot be negative');
+        END;
+      `).run();
+    } catch {}
+
+    coreSchemaInitialized = true;
+  } catch (err) {
+    console.warn('[D1 Core Schema Init Check Failed]:', err);
+  }
+}
 
 export async function getProductTableColumns(db: D1Database): Promise<Set<string>> {
+  await ensureCoreSchema(db);
   if (cachedProductTableColumns && cachedProductTableColumns.size > 0) {
     return cachedProductTableColumns;
   }
@@ -88,6 +391,7 @@ export async function getProductTableColumns(db: D1Database): Promise<Set<string
  * without data loss, table drops, or resets.
  */
 export async function ensureProductTableSchema(db: D1Database): Promise<Set<string>> {
+  await ensureCoreSchema(db);
   let columns = await getProductTableColumns(db);
 
   if (!schemaHealingAttempted) {
@@ -167,6 +471,7 @@ let cachedOrderTableColumns: Set<string> | null = null;
 let orderSchemaHealingAttempted = false;
 
 export async function getOrderTableColumns(db: D1Database): Promise<Set<string>> {
+  await ensureCoreSchema(db);
   if (cachedOrderTableColumns && cachedOrderTableColumns.size > 0) {
     return cachedOrderTableColumns;
   }
@@ -192,6 +497,7 @@ export async function getOrderTableColumns(db: D1Database): Promise<Set<string>>
 }
 
 export async function ensureOrderTableSchema(db: D1Database): Promise<Set<string>> {
+  await ensureCoreSchema(db);
   let columns = await getOrderTableColumns(db);
 
   if (!orderSchemaHealingAttempted) {
@@ -1535,7 +1841,24 @@ export async function updateCategoryInD1(db: D1Database, id: string, updates: Pa
 }
 
 export async function deleteCategoryFromD1(db: D1Database, idOrSlug: string): Promise<boolean> {
-  const res = await db.prepare('DELETE FROM categories WHERE id = ? OR slug = ?').bind(idOrSlug, idOrSlug).run();
+  const existing = await getCategoryById(db, idOrSlug);
+  if (!existing) {
+    throw new Error('Category not found');
+  }
+
+  // Prevent broken references: verify no products are assigned to this category
+  const productCount = await db
+    .prepare('SELECT COUNT(*) as count FROM products WHERE category_id = ? OR category_id = ?')
+    .bind(existing.id, existing.slug)
+    .first<{ count: number }>();
+
+  if (productCount && productCount.count > 0) {
+    throw new Error(
+      `Cannot delete category "${existing.name}". There are ${productCount.count} product(s) assigned to this category. Please reassign or delete the products first.`
+    );
+  }
+
+  const res = await db.prepare('DELETE FROM categories WHERE id = ? OR slug = ?').bind(existing.id, existing.slug).run();
   if (!res.success) {
     console.error('Failed to delete category from database:', res.error);
     throw new Error('Failed to delete category.');
@@ -1551,6 +1874,7 @@ let cachedSliderTableColumns: Set<string> | null = null;
 let sliderSchemaHealingAttempted = false;
 
 export async function getSliderTableColumns(db: D1Database): Promise<Set<string>> {
+  await ensureCoreSchema(db);
   if (cachedSliderTableColumns) return cachedSliderTableColumns;
   try {
     const res = await db.prepare("PRAGMA table_info('sliders')").all<{ name: string }>();

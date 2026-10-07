@@ -26,6 +26,9 @@ export interface ApiResponse<T> {
 function safeErrorMessage(rawMsg: any, status: number = 200): string {
   const fallback = status >= 500 ? 'Something went wrong. Please try again.' : 'Invalid request.';
   if (!rawMsg || typeof rawMsg !== 'string') return fallback;
+  if (/signal is aborted|aborted without reason|operation was aborted|aborterror/i.test(rawMsg)) {
+    return 'Request timed out while contacting the server. Please try again.';
+  }
   if (/sqlite|syntax error|d1|table |column |foreign key|prepare|bind|database disk|file not found|\/app\/|\/src\/|\.ts:\d+|\.js:\d+|admin_secret|token|credential|api[_-]?key/i.test(rawMsg)) {
     return fallback;
   }
@@ -34,7 +37,30 @@ function safeErrorMessage(rawMsg: any, status: number = 200): string {
 
 async function apiRequest<T>(url: string, options?: RequestInit, timeoutMs = 45000): Promise<{ success: boolean; data?: T; error?: string }> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = setTimeout(() => {
+    try {
+      controller.abort(new DOMException('Request timed out while contacting the server.', 'TimeoutError'));
+    } catch {
+      controller.abort();
+    }
+  }, timeoutMs);
+
+  const externalSignal = options?.signal;
+  const onExternalAbort = () => {
+    try {
+      controller.abort(externalSignal?.reason || new DOMException('Request cancelled.', 'AbortError'));
+    } catch {
+      controller.abort();
+    }
+  };
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      onExternalAbort();
+    } else {
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+  }
 
   try {
     const isMutation = options?.method && options.method.toUpperCase() !== 'GET' && options.method.toUpperCase() !== 'HEAD';
@@ -55,6 +81,9 @@ async function apiRequest<T>(url: string, options?: RequestInit, timeoutMs = 450
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onExternalAbort);
+    }
 
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -81,7 +110,16 @@ async function apiRequest<T>(url: string, options?: RequestInit, timeoutMs = 450
     };
   } catch (err: any) {
     clearTimeout(timeoutId);
-    if (err?.name === 'AbortError' || err?.message?.toLowerCase().includes('abort')) {
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onExternalAbort);
+    }
+    if (
+      err?.name === 'TimeoutError' ||
+      err?.name === 'AbortError' ||
+      err?.message?.toLowerCase().includes('abort') ||
+      err?.message?.toLowerCase().includes('timeout') ||
+      err?.message?.toLowerCase().includes('without reason')
+    ) {
       return {
         success: false,
         error: 'Request timed out while contacting the server. Please try again.',

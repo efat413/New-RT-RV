@@ -712,6 +712,29 @@ async function recordFailedAttempt(
   }
 }
 
+async function recordRateLimitAttempt(
+  key: string,
+  windowSeconds = 3600,
+  db?: D1Database
+): Promise<void> {
+  const now = Date.now();
+  const resetAt = now + windowSeconds * 1000;
+
+  if (db) {
+    try {
+      await db.prepare(
+        `INSERT INTO rate_limits (key, count, reset_at)
+         VALUES (?, 1, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           count = CASE WHEN reset_at <= ? THEN 1 ELSE count + 1 END,
+           reset_at = CASE WHEN reset_at <= ? THEN ? ELSE reset_at END`
+      ).bind(key, resetAt, now, now, resetAt).run();
+    } catch (err) {
+      console.error('[RateLimit Error] Atomic record rate limit attempt error in D1:', err);
+    }
+  }
+}
+
 async function clearFailedAttempts(key: string, db?: D1Database): Promise<void> {
   loginAttemptMap.delete(key);
   if (db) {
@@ -1787,7 +1810,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       });
 
       // Record successful registration against IP creation limit
-      await recordFailedAttempt(regIpSuccessKey, 5, 3600, env.DB);
+      await recordRateLimitAttempt(regIpSuccessKey, 3600, env.DB);
 
       // Retrieve user row to obtain password hash signature for token
       const createdRow = await getUserByEmailOrUsername(env.DB, email);
@@ -3060,6 +3083,12 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         await deleteCategoryFromD1(env.DB, catId);
         return jsonResponse({ success: true, message: `Category "${catId}" deleted successfully.` });
       } catch (err: any) {
+        if (err?.message?.includes('assigned to this category')) {
+          return jsonResponse({ success: false, error: err.message }, 400);
+        }
+        if (err?.message?.includes('not found')) {
+          return jsonResponse({ success: false, error: 'Category not found' }, 404);
+        }
         logServerError({ route: path, method, error: err, action: 'category.delete' });
         return jsonResponse({ success: false, error: 'Internal server error.' }, 500);
       }
@@ -4931,7 +4960,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const saved = await insertOrder(env.DB, orderData, { isTrustedAdmin: isStaffOrAdmin });
 
       // Record rate limit attempt for hourly phone throttling (no 60s cooldown)
-      await recordFailedAttempt(`order_ph_hour:${cleanPhone}`, 6, 3600, env.DB);
+      await recordRateLimitAttempt(`order_ph_hour:${cleanPhone}`, 3600, env.DB);
 
       // Cache for idempotency & rapid duplicate avoidance (both persistent D1 and memory)
       if (idempotencyKey) {
@@ -5670,6 +5699,16 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const order = await getOrderById(env.DB, orderParam.id || orderParam.orderNumber);
       if (!order) {
         return jsonResponse({ success: false, error: 'Order not found.' }, 404);
+      }
+
+      // Prevent duplicate courier booking on retries
+      if (order.consignmentId || order.courierWaybill) {
+        return jsonResponse({
+          success: false,
+          error: `Order #${order.orderNumber} is already booked with courier (Consignment ID: ${order.consignmentId}, Tracking Code: ${order.courierWaybill}). Cannot create a duplicate consignment.`,
+          consignment_id: order.consignmentId,
+          tracking_code: order.courierWaybill,
+        }, 400);
       }
 
       // Retrieve server credentials strictly from server environment or D1
