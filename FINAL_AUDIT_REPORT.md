@@ -19,10 +19,11 @@ A comprehensive regression, performance, accessibility, SEO, dependency, and sec
   * **NEEDS LIVE VERIFICATION** (Requires production Cloudflare deployment, live remote D1, real merchant APIs, or production traffic)
   * **NOT RUN** (Script or check was not executed during this audit run)
 - **Resolved Contradictions:**
-  * Fixed historical claim that the repository contained only 10 migrations (`0001` through `0010`); exactly **20 migration files** exist (`0001` through `0020_advance_payment.sql`).
+  * Fixed historical claim that the repository contained only 10 migrations (`0001` through `0010`); exactly **21 migration files** exist (`0001` through `0021_upgrade_review_system.sql`).
   * Fixed historical contradiction claiming "fully locked" when `package-lock.json` was absent; `package-lock.json` has now been generated, verified via `npm ci`, and committed.
   * Corrected claims of "No remaining issues"; live cloud and third-party production verifications remain pending.
   * Documented the 3 high-severity dev-dependency advisories reported by `npm audit` in `miniflare` under `wrangler`.
+  * Verified guest advance-payment manipulation defense: `POST /api/orders` strictly resets advance payment fields to 0 for unprivileged guests and customers, preventing client spoofing of confirmed advance payments and ensuring COD amounts are authoritatively calculated.
 
 ---
 
@@ -118,7 +119,7 @@ The repository contains 78 test scripts. The following representative scripts we
 
 ## 3. Database Migrations Status (Authoritative)
 
-The database schema is managed via Cloudflare D1 SQL migrations. Exactly **20 migration files** exist in `migrations/`:
+The database schema is managed via Cloudflare D1 SQL migrations. Exactly **21 migration files** exist in `migrations/`:
 
 | Migration File | Description | Verification Status |
 |---|---|---|
@@ -142,6 +143,7 @@ The database schema is managed via Cloudflare D1 SQL migrations. Exactly **20 mi
 | `0018_product_slug_history.sql` | Adds 301 redirect history table for renamed product slugs. | **PARTIALLY VERIFIED** (SQL syntax inspected) |
 | `0019_reviews_verified_purchase_security.sql` | Guards customer reviews to verified purchases. | **PARTIALLY VERIFIED** (SQL syntax inspected) |
 | `0020_advance_payment.sql` | Adds advance payment tracking columns on orders. | **PARTIALLY VERIFIED** (SQL syntax inspected) |
+| `0021_upgrade_review_system.sql` | Adds review status (approved, pending, rejected, hidden), images_json, updated_at, and moderation indexes. | **PASS** (review status filtering & moderation verified) |
 
 ---
 

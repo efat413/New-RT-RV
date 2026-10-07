@@ -4256,6 +4256,41 @@ function localApiDevPlugin(): Plugin {
               const paymentStatus = paymentMethod === 'dbbl' ? 'Unverified' : 'Pending';
               const shippingStatus = 'Pending';
 
+              // Authoritative pricing and total calculation
+              let authoritativeSubtotal = 0;
+              for (const it of verifiedItems) {
+                authoritativeSubtotal += (Number(it.sellingPriceSnapshot) || 0) * (Number(it.quantity) || 1);
+              }
+              const deliveryZone = orderCustomer.deliveryZone === 'outside_dhaka' ? 'outside_dhaka' : 'inside_dhaka';
+              const authoritativeDeliveryFee = deliveryZone === 'outside_dhaka'
+                ? (Number(devSettings.outsideDhakaFee) || 150)
+                : (Number(devSettings.insideDhakaFee) || 80);
+              let authoritativeDiscount = 0;
+              if (rawOrder.couponCode) {
+                const cleanCode = String(rawOrder.couponCode).toUpperCase().trim();
+                const matchedCoupon = devCoupons.find((c) => c.code.toUpperCase() === cleanCode && c.isActive);
+                if (matchedCoupon && authoritativeSubtotal >= (matchedCoupon.minSpend || 0)) {
+                  if (matchedCoupon.discountType === 'percentage') {
+                    authoritativeDiscount = Math.round((authoritativeSubtotal * Math.min(100, Math.max(0, Number(matchedCoupon.discountValue) || 0))) / 100);
+                  } else if (matchedCoupon.discountType === 'fixed') {
+                    authoritativeDiscount = Math.min(authoritativeSubtotal, Math.max(0, Number(matchedCoupon.discountValue) || 0));
+                  } else if (matchedCoupon.discountType === 'free_shipping') {
+                    authoritativeDiscount = authoritativeDeliveryFee;
+                  }
+                }
+              }
+              const authoritativeTotalAmount = Math.max(0, authoritativeSubtotal + authoritativeDeliveryFee - authoritativeDiscount);
+
+              const isDevAdmin = Boolean(
+                devAuth.auth &&
+                (devAuth.auth.user.role === 'super_admin' || devAuth.auth.permissions?.['order.manage'])
+              );
+              const rawDevAdvance = isDevAdmin && rawOrder.advancePayment != null ? Number(rawOrder.advancePayment) : 0;
+              const devAdvancePayment = Number.isFinite(rawDevAdvance) && rawDevAdvance > 0
+                ? Math.min(authoritativeTotalAmount, Math.max(0, rawDevAdvance))
+                : 0;
+              const devCustomerDue = Math.max(0, Math.round((authoritativeTotalAmount - devAdvancePayment) * 100) / 100);
+
               const order = {
                 ...rawOrder,
                 userId: devUserId,
@@ -4264,18 +4299,22 @@ function localApiDevPlugin(): Plugin {
                 id: freshOrderId,
                 orderNumber: freshOrderNum,
                 items: verifiedItems,
+                subtotal: authoritativeSubtotal,
+                deliveryFee: authoritativeDeliveryFee,
+                discountAmount: authoritativeDiscount,
+                totalAmount: authoritativeTotalAmount,
                 paymentMethod,
                 paymentStatus,
                 shippingStatus,
                 totalCost,
-                totalGrossProfit,
-                advancePayment: 0,
-                advancePaymentMethod: undefined,
-                advancePaymentNote: undefined,
-                advancePaymentUpdatedAt: undefined,
-                advancePaymentUpdatedBy: undefined,
-                customerDue: Number(rawOrder.totalAmount) || 0,
-                dueAmount: Number(rawOrder.totalAmount) || 0,
+                totalGrossProfit: authoritativeSubtotal - totalCost,
+                advancePayment: devAdvancePayment,
+                advancePaymentMethod: isDevAdmin && devAdvancePayment > 0 ? rawOrder.advancePaymentMethod : undefined,
+                advancePaymentNote: isDevAdmin && devAdvancePayment > 0 ? rawOrder.advancePaymentNote : undefined,
+                advancePaymentUpdatedAt: isDevAdmin && devAdvancePayment > 0 ? new Date().toISOString() : undefined,
+                advancePaymentUpdatedBy: isDevAdmin && devAdvancePayment > 0 ? (devUserEmail || devUserId || 'admin') : undefined,
+                customerDue: devCustomerDue,
+                dueAmount: devCustomerDue,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
               };

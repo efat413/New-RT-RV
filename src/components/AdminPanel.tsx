@@ -349,6 +349,13 @@ const AdminPanelContent: React.FC = () => {
   const [stockSuccessNotice, setStockSuccessNotice] = useState<string | null>(null);
   const [ratingSaveSuccess, setRatingSaveSuccess] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (ratingSaveSuccess) {
+      const timer = setTimeout(() => setRatingSaveSuccess(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [ratingSaveSuccess]);
+
   // Product CRUD states
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);

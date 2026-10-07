@@ -4682,6 +4682,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       //   - Strip client-supplied userId to prevent account impersonation
       verifiedTokenUser = null;
       let authenticatedDbUser: any = null;
+      let authenticatedAuthContext: any = null;
 
       const token = extractTokenFromRequest(request);
       if (token) {
@@ -4691,6 +4692,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           if (!authRes.errorResponse && authRes.auth) {
             authenticatedDbUser = authRes.auth.dbUser;
             verifiedTokenUser = authRes.auth.tokenUser;
+            authenticatedAuthContext = authRes.auth;
           } else {
             // Fallback token verification using resolveAuthSecret & verifyAuthToken
             // (e.g. for valid JWTs when D1 user lookup is transiently bypassed or in testing)
@@ -4730,6 +4732,38 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         orderData.userEmail = undefined;
         if (orderData.customer) {
           orderData.customer.userId = undefined;
+        }
+      }
+
+      // Security Enforcement: Authoritative privilege check for order management
+      const isStaffOrAdmin = Boolean(
+        authenticatedAuthContext &&
+        (authenticatedAuthContext.role === 'super_admin' ||
+         hasPermission(authenticatedAuthContext, 'order.manage'))
+      );
+
+      // SECURITY RULE: Guest or unprivileged customer CANNOT set advance payment or payment status!
+      // A guest/customer must never authoritatively set a confirmed advance-payment amount,
+      // and fake advance payments or client-provided payment statuses must never reduce COD to 0.
+      if (!isStaffOrAdmin) {
+        orderData.advancePayment = 0;
+        orderData.advancePaymentMethod = undefined;
+        orderData.advancePaymentNote = undefined;
+        orderData.advancePaymentUpdatedBy = undefined;
+        orderData.advancePaymentUpdatedAt = undefined;
+        if (orderData.paymentMethod === 'dbbl') {
+          orderData.paymentStatus = 'UNVERIFIED' as any;
+        } else {
+          orderData.paymentStatus = 'Pending' as any;
+        }
+      } else {
+        const rawAdminAdvance = orderData.advancePayment != null ? Number(orderData.advancePayment) : 0;
+        if (!Number.isFinite(rawAdminAdvance) || rawAdminAdvance < 0) {
+          orderData.advancePayment = 0;
+        }
+        if (orderData.advancePayment && orderData.advancePayment > 0) {
+          orderData.advancePaymentUpdatedBy = authenticatedDbUser.email || authenticatedDbUser.id || 'admin';
+          orderData.advancePaymentUpdatedAt = new Date().toISOString();
         }
       }
 
@@ -4894,7 +4928,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       }
 
       // 5. Server-side authoritative validation, pricing calculation & stock deduction via insertOrder
-      const saved = await insertOrder(env.DB, orderData);
+      const saved = await insertOrder(env.DB, orderData, { isTrustedAdmin: isStaffOrAdmin });
 
       // Record rate limit attempt for hourly phone throttling (no 60s cooldown)
       await recordFailedAttempt(`order_ph_hour:${cleanPhone}`, 6, 3600, env.DB);

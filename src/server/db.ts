@@ -3308,7 +3308,7 @@ export function generateSecureOrderNumber(year: number = new Date().getFullYear(
   return `RT-${year}-${randNum}`;
 }
 
-export async function insertOrder(db: D1Database, order: Order): Promise<Order> {
+export async function insertOrder(db: D1Database, order: Order, options?: { isTrustedAdmin?: boolean }): Promise<Order> {
   if (!order) {
     throw new Error('Invalid order payload: order object is required.');
   }
@@ -3516,14 +3516,19 @@ export async function insertOrder(db: D1Database, order: Order): Promise<Order> 
   // 9. Construct atomic D1 batch transaction (order insertion + stock deductions)
   await ensureOrderTableSchema(db);
 
-  const rawAdvance = order.advancePayment != null ? Number(order.advancePayment) : 0;
+  // 9. Advance Payment Security Rule:
+  // A guest/customer can NEVER authoritatively set a confirmed advance-payment amount.
+  // Advance payment is only accepted if created by an authorized admin workflow (isTrustedAdmin === true).
+  // A fake advance payment must never reduce customer due / COD to zero.
+  const isTrustedAdmin = Boolean(options?.isTrustedAdmin);
+  const rawAdvance = isTrustedAdmin && order.advancePayment != null ? Number(order.advancePayment) : 0;
   const initialAdvance = Number.isFinite(rawAdvance) && rawAdvance > 0
     ? Math.min(authoritativeTotalAmount, Math.max(0, rawAdvance))
     : 0;
-  const advanceMethod = order.advancePaymentMethod ? String(order.advancePaymentMethod).trim() : null;
-  const advanceNote = order.advancePaymentNote ? String(order.advancePaymentNote).trim() : null;
+  const advanceMethod = isTrustedAdmin && initialAdvance > 0 && order.advancePaymentMethod ? String(order.advancePaymentMethod).trim() : null;
+  const advanceNote = isTrustedAdmin && initialAdvance > 0 && order.advancePaymentNote ? String(order.advancePaymentNote).trim() : null;
   const advanceUpdatedAt = initialAdvance > 0 ? (order.advancePaymentUpdatedAt || new Date().toISOString()) : null;
-  const advanceUpdatedBy = initialAdvance > 0 ? (order.advancePaymentUpdatedBy || order.userId || 'system') : null;
+  const advanceUpdatedBy = initialAdvance > 0 ? (order.advancePaymentUpdatedBy || order.userId || 'admin') : null;
 
   const insertSql = `
     INSERT INTO orders (
