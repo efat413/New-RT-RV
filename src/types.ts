@@ -145,6 +145,7 @@ export interface DbblPaymentDetails {
   senderAccountOrPhone: string;
   transactionId: string;
   depositSlipUrl?: string;
+  isVerified?: boolean;
 }
 
 export type ReviewStatus = 'pending' | 'approved' | 'rejected' | 'hidden';

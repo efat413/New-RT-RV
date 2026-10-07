@@ -3,6 +3,61 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function() {
+        if (typeof window === 'undefined') return;
+        try {
+          var win = window;
+          var _origFetch = win.fetch;
+          var currentFetch = typeof _origFetch === 'function' ? _origFetch.bind(win) : _origFetch;
+
+          // Walk prototype chain of window to ensure any 'fetch' getter has a corresponding setter
+          var proto = win;
+          while (proto) {
+            try {
+              var desc = Object.getOwnPropertyDescriptor(proto, 'fetch');
+              if (desc && !desc.set && desc.configurable) {
+                Object.defineProperty(proto, 'fetch', {
+                  get: function() { return currentFetch; },
+                  set: function(fn) { currentFetch = fn; },
+                  configurable: true,
+                  enumerable: true
+                });
+              }
+            } catch(e) {}
+            proto = Object.getPrototypeOf(proto);
+          }
+
+          // Ensure window own property 'fetch' has getter and setter so window.fetch = fn never throws
+          try {
+            var winDesc = Object.getOwnPropertyDescriptor(win, 'fetch');
+            if (!winDesc || (!winDesc.set && winDesc.configurable !== false)) {
+              Object.defineProperty(win, 'fetch', {
+                get: function() { return currentFetch; },
+                set: function(fn) { currentFetch = fn; },
+                configurable: true,
+                enumerable: true
+              });
+            }
+          } catch(e) {}
+
+          // Suppress unhandled errors originating from third-party browser extensions
+          if (typeof win.addEventListener === 'function') {
+            win.addEventListener('error', function(event) {
+              if (event && event.filename && (
+                event.filename.indexOf('chrome-extension://') === 0 ||
+                event.filename.indexOf('moz-extension://') === 0 ||
+                event.filename.indexOf('safari-extension://') === 0
+              )) {
+                if (typeof event.preventDefault === 'function') {
+                  event.preventDefault();
+                }
+              }
+            }, true);
+          }
+        } catch(err) {}
+      })();
+    </script>
     <link rel="icon" type="image/jpeg" href="https://i.pinimg.com/736x/bb/fe/59/bbfe59570509bbc00e9d703fd45ada18.jpg" />
     <title>Rongodhonu Trade | রঙধনু ট্রেড - Online Shopping in Bangladesh</title>
     <meta name="description" content="Rongodhonu Trade (রঙধনু ট্রেড / Rongdhonu) - বাংলাদেশের বিশ্বস্ত অনলাইন শপ। ঘড়ি, ব্রেসলেট, মানিব্যাগ, হেডফোন, TWS ইয়ারবাডস ও আকর্ষণীয় গিফট আইটেম কিনুন ক্যাশ অন ডেলিভারিতে। রংধনু কালেকশন।" />
