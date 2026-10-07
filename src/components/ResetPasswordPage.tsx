@@ -60,6 +60,11 @@ export const ResetPasswordPage: React.FC = () => {
       return;
     }
 
+    if (trimmedNew.length > 128) {
+      setErrorMessage('New password cannot exceed 128 characters.');
+      return;
+    }
+
     if (trimmedNew !== trimmedConfirm) {
       setErrorMessage('Passwords do not match. Please verify your new password.');
       return;
@@ -187,6 +192,7 @@ export const ResetPasswordPage: React.FC = () => {
                         placeholder="At least 8 characters"
                         required
                         minLength={8}
+                        maxLength={128}
                         disabled={isLoading || tokenMissing}
                         className="w-full pl-10 pr-10 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 disabled:bg-slate-100 disabled:text-slate-400"
                       />
@@ -216,6 +222,7 @@ export const ResetPasswordPage: React.FC = () => {
                         placeholder="Re-enter your new password"
                         required
                         minLength={8}
+                        maxLength={128}
                         disabled={isLoading || tokenMissing}
                         className="w-full pl-10 pr-10 py-3 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 disabled:bg-slate-100 disabled:text-slate-400"
                       />

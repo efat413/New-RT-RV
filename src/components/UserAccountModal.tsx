@@ -198,6 +198,11 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
       return;
     }
 
+    if (trimmedNew.length > 128) {
+      setPasswordChangeMessage({ text: 'New password cannot exceed 128 characters.', isError: true });
+      return;
+    }
+
     if (trimmedNew !== trimmedConfirm) {
       setPasswordChangeMessage({ text: 'New passwords do not match. Please verify.', isError: true });
       return;
@@ -589,6 +594,7 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
                             onChange={(e) => setNewPassword(e.target.value)}
                             placeholder="At least 8 characters"
                             minLength={8}
+                            maxLength={128}
                             className="w-full pl-9 pr-9 py-2 bg-white border border-slate-300 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-rose-500"
                           />
                           <button
@@ -614,6 +620,7 @@ export const UserAccountModal: React.FC<UserAccountModalProps> = ({ isOpen, onCl
                             onChange={(e) => setConfirmNewPassword(e.target.value)}
                             placeholder="Re-enter new password"
                             minLength={8}
+                            maxLength={128}
                             className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-rose-500"
                           />
                         </div>

@@ -268,6 +268,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, message: 'Password must be at least 8 characters long.' };
     }
 
+    if (trimmedPassword.length > 128) {
+      return { success: false, message: 'Password cannot exceed 128 characters.' };
+    }
+
     try {
       const regRes = await authApi.register({
         name: trimmedName,

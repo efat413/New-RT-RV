@@ -151,6 +151,11 @@ export const AuthModal: React.FC = () => {
       return;
     }
 
+    if (trimmedPass.length > 128) {
+      setErrorMessage('Password cannot exceed 128 characters.');
+      return;
+    }
+
     if (trimmedPass !== trimmedConfirmPass) {
       setErrorMessage('Passwords do not match. Please verify your confirm password.');
       return;
@@ -401,6 +406,7 @@ export const AuthModal: React.FC = () => {
                     type={showSignUpPassword ? 'text' : 'password'}
                     required
                     minLength={8}
+                    maxLength={128}
                     value={signUpPassword}
                     onChange={(e) => setSignUpPassword(e.target.value)}
                     placeholder="Create a password (min 8 characters)"
@@ -429,6 +435,7 @@ export const AuthModal: React.FC = () => {
                     type={showSignUpPassword ? 'text' : 'password'}
                     required
                     minLength={8}
+                    maxLength={128}
                     value={signUpConfirmPassword}
                     onChange={(e) => setSignUpConfirmPassword(e.target.value)}
                     placeholder="Confirm your password"

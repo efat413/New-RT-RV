@@ -1892,9 +1892,10 @@ function localApiDevPlugin(): Plugin {
               res.statusCode = 400;
               return res.end(JSON.stringify({ success: false, error: 'Valid email address is required.' }));
             }
-            if (!password || password.length < 8) {
+            const pwValidation = validatePasswordLength(password);
+            if (!pwValidation.valid) {
               res.statusCode = 400;
-              return res.end(JSON.stringify({ success: false, error: 'Password must be at least 8 characters long.' }));
+              return res.end(JSON.stringify({ success: false, error: pwValidation.error || 'Password must be between 8 and 128 characters long.' }));
             }
 
             // Security Rule: Public registration cannot claim a reserved super admin email address
