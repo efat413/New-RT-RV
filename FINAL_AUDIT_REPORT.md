@@ -154,7 +154,7 @@ The following operational verifications **CANNOT** be completed in the local san
 | Area | Scope | Status | Requirement / Expected Verification Action |
 |---|---|---|---|
 | **1. Cloudflare Workers Deployment** | Worker bundling & runtime isolates | **NEEDS LIVE VERIFICATION** | Execute `wrangler deploy` and verify worker starts with 0 runtime exceptions on Cloudflare edge. |
-| **2. Remote D1 Database Migrations** | Cloudflare D1 Remote Database | **NEEDS LIVE VERIFICATION** | Execute `wrangler d1 migrations apply rongdhonu-db --remote` to apply all 20 migrations (`0001` through `0020`) to the production database. |
+| **2. Remote D1 Database Migrations** | Cloudflare D1 Remote Database | **NEEDS LIVE VERIFICATION** | Execute `wrangler d1 migrations apply rongdhonu-db --remote` to apply all 21 migrations (`0001` through `0021`) to the production database. |
 | **3. Production Secret Bindings** | Cloudflare Secret Vault | **NEEDS LIVE VERIFICATION** | Verify `ADMIN_SECRET`, `JWT_SECRET`, `STEADFAST_API_KEY`, `STEADFAST_SECRET_KEY`, `COURIER_WEBHOOK_SECRET`, `RESEND_API_KEY`, `SUPER_ADMIN_EMAILS`, and `SUPER_ADMIN_USER_IDS` via `wrangler secret put`. |
 | **4. Cloudflare Edge Caching** | CDN Caching & Header Inspection | **NEEDS LIVE VERIFICATION** | Inspect `CF-Cache-Status` response header on `/api/store/homepage` across regional edge points of presence (Dhaka, Singapore, etc.). |
 | **5. Live Courier Webhooks** | Steadfast Inbound Webhooks | **NEEDS LIVE VERIFICATION** | Transmit a real live test webhook from Steadfast Courier and inspect Cloudflare Worker logs for successful HMAC-SHA256 signature verification. |

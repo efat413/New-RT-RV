@@ -41,10 +41,10 @@ async function verifyD1MigrationChain() {
     .sort();
 
   console.log(`  Found ${files.length} SQL migration files in migrations/`);
-  assert(files.length === 20, `Exactly 20 migration files exist (found ${files.length})`);
+  assert(files.length === 21, `Exactly 21 migration files exist (found ${files.length})`);
 
-  // Verify sequential numbers 0001 to 0020
-  for (let i = 1; i <= 20; i++) {
+  // Verify sequential numbers 0001 to 0021
+  for (let i = 1; i <= 21; i++) {
     const prefix = String(i).padStart(4, '0');
     const matched = files.find((f) => f.startsWith(`${prefix}_`));
     assert(!!matched, `Migration with prefix ${prefix} exists: "${matched}"`);
