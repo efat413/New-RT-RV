@@ -6,7 +6,7 @@
 
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'sha256-AjqrFSwlY5H5Xu7BDNjDp96JBtKMjTBx0PeEEAXqxn0=' https://www.googletagmanager.com https://www.google-analytics.com https://connect.facebook.net https://analytics.tiktok.com",
+  "script-src 'self' 'sha256-cI6izSXm9UBHMi08mCIWqm4Huokh/0M/yHKQOA1Y6p4=' 'sha256-AjqrFSwlY5H5Xu7BDNjDp96JBtKMjTBx0PeEEAXqxn0=' https://www.googletagmanager.com https://www.google-analytics.com https://connect.facebook.net https://analytics.tiktok.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
   "img-src 'self' data: blob: https://images.unsplash.com https://i.pinimg.com https://img.youtube.com https://api.qrserver.com https://www.facebook.com https://connect.facebook.net https://analytics.tiktok.com https://*.tiktok.com https://www.google-analytics.com https://www.googletagmanager.com",

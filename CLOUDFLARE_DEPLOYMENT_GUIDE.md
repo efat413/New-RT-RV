@@ -141,10 +141,10 @@ If you have an existing D1 database where credentials were previously saved in `
 
 Cloudflare Pages and Cloudflare Workers Builds initialize a containerized environment before running the build command. The following optimizations have been configured to make this initialization fast, deterministic, and reliable:
 
-1. **`.node-version` & `.nvmrc`**:
-   - Pinned to `22` to match `package.json` `"engines": { "node": ">=22.0.0" }`.
-   - Required by `wrangler@4.147.0`, `miniflare@5`, and `@cloudflare/kv-asset-handler` which enforce Node.js `>=22.0.0`.
-   - Prevents Cloudflare from defaulting to older Node versions or failing during `npx wrangler deploy`.
+1. **Node.js Engine Specification**:
+   - Pinned in `package.json` via `"engines": { "node": ">=22.0.0", "npm": ">=10.0.0" }` and `.github/workflows/deploy.yml` via `node-version: '22'`.
+   - Required by `wrangler@4.148.0`, `miniflare@5`, and `@cloudflare/kv-asset-handler` which enforce Node.js `>=22.0.0`.
+   - Guarantees compatibility across GitHub Actions and deployment environments.
 
 2. **`package-lock.json`**:
    - Generated a deterministic dependency tree.

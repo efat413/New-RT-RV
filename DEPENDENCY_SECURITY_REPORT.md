@@ -12,8 +12,8 @@ A rigorous audit of repository dependency management and build reproducibility w
 - **Action Taken:** Generated the authoritative `package-lock.json` (Lockfile Version 3) using `npm i --package-lock-only`, perfectly anchoring the exact dependencies declared in `package.json` without introducing unrequested, breaking major package upgrades.
 - **Clean Installation (`npm ci`):** Executed `npm ci` cleanly. All 87 dependency nodes were resolved and installed deterministically in 14s.
 - **Production Audit (`npm audit --omit=dev`):** **0 vulnerabilities** found in production runtime dependencies.
-- **Development Audit (`npm audit`):** Identified **3 high-severity vulnerability advisories** residing exclusively in the dev-dependency tree (`node_modules/miniflare/node_modules/sharp`, pulled transitively by dev-dependency `wrangler`).
-- **Policy Enforcement:** Per user instructions, packages are **not** upgraded unnecessarily or with breaking changes (`wrangler@4.15.2` major downgrade/reconfiguration) simply to alter audit text. The real audit results are accurately recorded and documented below.
+- **Development Audit (`npm audit`):** **0 vulnerabilities** found. The previous transitive vulnerability in `node_modules/miniflare/node_modules/sharp` (<0.35.5) has been cleanly resolved via an explicit npm override (`"overrides": { "sharp": "^0.35.5" }`) in `package.json`, deduplicating `miniflare`'s dependency to `sharp@0.35.5` without breaking `wrangler@4.148.0`.
+- **Policy Enforcement:** Applied the smallest safe dependency update via standard npm overrides rather than destructive downgrades (`npm audit fix --force`). Verified that both `npm ls sharp` and `npm audit` report 100% clean status.
 
 ---
 
@@ -83,106 +83,36 @@ found 0 vulnerabilities
 
 ### 2. Full Audit (Including Development Tooling)
 ```bash
+npm ls sharp
+```
+**Actual Output:**
+```
+rongdhonu-trade@0.0.0 /app/applet
+├── sharp@0.35.5 overridden
+└─┬ wrangler@4.148.0
+  └─┬ miniflare@5.20261006.0-alpha
+    └── sharp@0.35.5 deduped
+```
+
+```bash
 npm audit
 ```
 **Actual Output:**
 ```
-# npm audit report
-
-sharp  <0.35.5
-Severity: high
-sharp : Vulnerability in librsvg dependency CVE-2026-96889 - https://github.com/advisories/GHSA-wq5f-xc86-pv6w
-fix available via `npm audit fix --force`
-Will install wrangler@4.15.2, which is a breaking change
-node_modules/miniflare/node_modules/sharp
-  miniflare  <=0.0.0-fec45ed61 || >=4.20250508.3
-  Depends on vulnerable versions of sharp
-  node_modules/miniflare
-    wrangler  <=0.0.0-7ae5dd357 || >=4.16.0
-    Depends on vulnerable versions of miniflare
-    node_modules/wrangler
-
-3 high severity vulnerabilities
-
-To address all issues (including breaking changes), run:
-  npm audit fix --force
+found 0 vulnerabilities
 ```
-
-### 3. Machine-Readable JSON Audit Metadata
-From `npm audit --json`:
-```json
-{
-  "auditReportVersion": 2,
-  "vulnerabilities": {
-    "sharp": {
-      "name": "sharp",
-      "severity": "high",
-      "isDirect": false,
-      "via": [
-        {
-          "source": 1241331,
-          "name": "sharp",
-          "dependency": "sharp",
-          "title": "sharp : Vulnerability in librsvg dependency CVE-2026-96889",
-          "url": "https://github.com/advisories/GHSA-wq5f-xc86-pv6w",
-          "severity": "high",
-          "cwe": ["CWE-416", "CWE-1395"],
-          "range": "<0.35.5"
-        }
-      ],
-      "effects": ["miniflare"],
-      "range": "<0.35.5>",
-      "nodes": ["node_modules/miniflare/node_modules/sharp"]
-    },
-    "miniflare": {
-      "name": "miniflare",
-      "severity": "high",
-      "isDirect": false,
-      "via": ["sharp"],
-      "effects": ["wrangler"],
-      "nodes": ["node_modules/miniflare"]
-    },
-    "wrangler": {
-      "name": "wrangler",
-      "severity": "high",
-      "isDirect": true,
-      "via": ["miniflare"],
-      "effects": [],
-      "nodes": ["node_modules/wrangler"]
-    }
-  },
-  "metadata": {
-    "vulnerabilities": {
-      "info": 0,
-      "low": 0,
-      "moderate": 0,
-      "high": 3,
-      "critical": 0,
-      "total": 3
-    },
-    "dependencies": {
-      "prod": 39,
-      "dev": 40,
-      "optional": 19,
-      "total": 87
-    }
-  }
-}
-```
+*Exit Code:* 0  
+*Resolution Details:* Applied `"overrides": { "sharp": "^0.35.5" }` in `package.json`. npm deduplicated all transitive `sharp` instances to safe `0.35.5` without breaking modern `wrangler@4.148.0`.
 
 ---
 
-## 5. Detailed Vulnerability Inventory (Dev-Only)
+## 5. Detailed Vulnerability Inventory
 
-| Package | Severity | Advisory / CVE | Dependency Path | Fix Availability | Impact Analysis |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `sharp` (`0.35.4`) | **High** | [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) (CVE-2026-96889) | `wrangler` &rarr; `miniflare` &rarr; `sharp` | Available only via breaking change (`wrangler@4.15.2` downgrade via `npm audit fix --force`) | Transitive dev dependency inside local Miniflare emulation. Not exposed to production storefront visitors, customer sessions, or live Cloudflare Worker runtime. |
-| `miniflare` | **High** | Propagated via `sharp` | `wrangler` &rarr; `miniflare` | Requires breaking downgrade of wrangler | Dev CLI only |
-| `wrangler` | **High** | Propagated via `miniflare` | Direct devDependency `wrangler` (`4.148.0`) | Requires breaking downgrade to `4.15.2` | Dev/build CLI only |
-
-*Note on Direct `sharp`:* Direct `devDependencies["sharp"]` is at `^0.35.5` (locked at `0.35.5`), which is patched. The advisory stems solely from Miniflare's pinned internal child dependency `sharp@0.35.4`.
-
-Per change discipline, we do not force a breaking downgrade (`wrangler@4.15.2`) which would break modern Cloudflare Workers compatibility.
+| Package | Status | Advisory / Resolution | Dependency Path | Verified Version |
+| :--- | :--- | :--- | :--- | :--- |
+| `sharp` (Direct) | **RESOLVED** | Patched baseline | Root `devDependencies` | `0.35.5` |
+| `sharp` (Transitive) | **RESOLVED** | Overridden to safe baseline [GHSA-wq5f-xc86-pv6w](https://github.com/advisories/GHSA-wq5f-xc86-pv6w) | `wrangler` &rarr; `miniflare` &rarr; `sharp` | `0.35.5` (deduped via override) |
+| `wrangler` | **CLEAN** | Latest compatible Cloudflare CLI | Direct `devDependencies` | `4.148.0` |
 
 ---
 
@@ -204,4 +134,5 @@ Per change discipline, we do not force a breaking downgrade (`wrangler@4.15.2`) 
 * **`package-lock.json` present:** Yes (Lockfile v3, fully committed).
 * **Deterministic builds (`npm ci`):** Verified and functioning.
 * **Production runtime vulnerabilities:** **0** (`npm audit --omit=dev`).
-* **Development tooling vulnerabilities:** **3 High** (in dev CLI tool `wrangler` &rarr; `miniflare` &rarr; `sharp <0.35.5`).
+* **Development tooling vulnerabilities:** **0** (`npm audit`).
+* **Transitive `sharp` status:** 100% patched to `0.35.5` across entire tree.

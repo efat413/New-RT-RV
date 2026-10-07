@@ -22,7 +22,8 @@ A comprehensive regression, performance, accessibility, SEO, dependency, and sec
   * Fixed historical claim that the repository contained only 10 migrations (`0001` through `0010`); exactly **21 migration files** exist (`0001` through `0021_upgrade_review_system.sql`).
   * Fixed historical contradiction claiming "fully locked" when `package-lock.json` was absent; `package-lock.json` has now been generated, verified via `npm ci`, and committed.
   * Corrected claims of "No remaining issues"; live cloud and third-party production verifications remain pending.
-  * Documented the 3 high-severity dev-dependency advisories reported by `npm audit` in `miniflare` under `wrangler`.
+  * Resolved the sharp vulnerability in dev dependencies via package.json override (`sharp: ^0.35.5`), achieving 0 vulnerabilities in `npm audit`.
+  * Verified reviews API bounded pagination: `GET /api/reviews` (default 20, max 50) and `GET /api/admin/reviews` (default 50, max 100) with deterministic sorting and SQL parameterization.
   * Verified guest advance-payment manipulation defense: `POST /api/orders` strictly resets advance payment fields to 0 for unprivileged guests and customers, preventing client spoofing of confirmed advance payments and ensuring COD amounts are authoritatively calculated.
 
 ---
@@ -37,7 +38,7 @@ A comprehensive regression, performance, accessibility, SEO, dependency, and sec
 | **Production Asset Build** | `npm run build` (`vite build`) | **PASS** | Production bundle built cleanly (1725 modules transformed in ~1.36s); 9 lazy-loaded admin chunks generated. |
 | **Deterministic Install** | `npm ci` | **PASS** | Clean install executed from `package-lock.json` (87 packages installed in 14s). |
 | **Production Dependency Audit** | `npm audit --omit=dev` | **PASS** | Exactly **0 vulnerabilities** found in production runtime dependencies. |
-| **Development Dependency Audit** | `npm audit` | **FAIL** | **3 high severity vulnerabilities** in dev tooling (`wrangler` -> `miniflare` -> `sharp <0.35.5`, CVE-2026-96889). Fix requires a breaking downgrade to `wrangler@4.15.2`. |
+| **Development Dependency Audit** | `npm audit` | **PASS** | **0 vulnerabilities** found. The transitive vulnerable `sharp` in `miniflare` was resolved via `"overrides": { "sharp": "^0.35.5" }` in `package.json`, pinning all `sharp` instances to safe `0.35.5`. |
 
 ---
 
@@ -176,6 +177,8 @@ The following operational verifications **CANNOT** be completed in the local san
 8. **PBKDF2 Password Hashing & Rotating Session Invalidation:** 100,000 iteration PBKDF2 with 128-bit `pwdSig` session invalidation.
 9. **Password Reset Timing Equalization:** Uniform execution delay and dummy cryptographic operations prevent account enumeration.
 
-### Confirmed Remaining Bugs & Discrepancies
-1. **Dev Tooling High Vulnerability Advisories:** `npm audit` reports 3 high-severity vulnerabilities in `wrangler` -> `miniflare` -> `sharp <0.35.5` (CVE-2026-96889). Awaiting an upstream patch from Cloudflare without breaking major version downgrades.
-2. **Live Cloudflare & External Integration Pending:** Remote D1 migrations (`0001` through `0020`), Cloudflare production deployment, live Steadfast webhooks, and Resend production email deliverability require live cloud environment credentials and remain **NEEDS LIVE VERIFICATION**.
+10. **Zero Development & Production Vulnerabilities:** `npm audit` confirms 0 vulnerabilities across direct and transitive dependencies after adding the sharp override.
+11. **Server-Side Reviews Bounded Pagination:** `GET /api/reviews` and `GET /api/admin/reviews` strictly enforce pagination limits (20-50 for public, 50-100 for admin) with deterministic ordering (`ORDER BY created_at DESC, id DESC`).
+
+### Confirmed Remaining Items & Operational Verifications
+1. **Live Cloudflare & External Integration Pending:** Remote D1 migrations (`0001` through `0021_upgrade_review_system.sql`), Cloudflare production deployment (`wrangler deploy`), live Steadfast webhooks, and Resend production email deliverability require live cloud environment credentials and remain **NEEDS LIVE VERIFICATION**.

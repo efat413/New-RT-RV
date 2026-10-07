@@ -70,6 +70,7 @@ All verification items are strictly categorized into exactly one of:
 | **CORS & Origin Protection** | **PASS** | State-changing requests (`POST`, `PUT`, `DELETE`) validate Origin and Referer headers in `src/server/router.ts` to prevent cross-site request forgery. |
 | **Rate Limiting** | **PASS** | Server-side IP rate limiting enforced on registration (5/min $\rightarrow$ 429), password reset (5/min $\rightarrow$ 429), and image uploads (10/min $\rightarrow$ 429). Verified in `scripts/verify-security-hardening.ts` and `scripts/verify-upload-rate-limit.ts`. |
 | **Unexpected Error Leakage** | **PASS** | `jsonResponse` masks unhandled 5xx internal exceptions to generic user-safe error messages, stripping database schema names and stack traces. Verified in `scripts/verify-auth-security-fixes.ts`. |
+| **Reviews Query Bounding & Pagination** | **PASS** | Public endpoint `GET /api/reviews` (default 20, max 50) and admin moderation `GET /api/admin/reviews` (default 50, max 100) enforce server-side parameterized limits, offset, and deterministic sorting (`created_at DESC, id DESC`). Unapproved reviews strictly filtered from public view. Verified in `scripts/verify-full-review-pagination.ts`. |
 
 ---
 
@@ -142,9 +143,9 @@ All verification items are strictly categorized into exactly one of:
 
 ---
 
-## 3. Database Migrations Status (All 20 Migrations)
+## 3. Database Migrations Status (All 21 Migrations)
 
-The database schema is managed via Cloudflare D1 SQL migrations. Exactly **20 migration files** exist in `migrations/`:
+The database schema is managed via Cloudflare D1 SQL migrations. Exactly **21 migration files** exist in `migrations/`:
 
 | Migration File | Description | Verification Status |
 |---|---|---|
@@ -168,6 +169,7 @@ The database schema is managed via Cloudflare D1 SQL migrations. Exactly **20 mi
 | `0018_product_slug_history.sql` | Adds 301 redirect history table for renamed product slugs. | **PARTIALLY VERIFIED** (SQL syntax inspected) |
 | `0019_reviews_verified_purchase_security.sql` | Guards customer reviews to verified purchases. | **PARTIALLY VERIFIED** (SQL syntax inspected) |
 | `0020_advance_payment.sql` | Adds advance payment tracking columns on orders. | **PARTIALLY VERIFIED** (SQL syntax inspected) |
+| `0021_upgrade_review_system.sql` | Adds review status (approved, pending, rejected, hidden), images_json, updated_at, and moderation indexes. | **PASS** (review status filtering & moderation verified) |
 
 ---
 
@@ -178,7 +180,7 @@ The following operational checks cannot be completed locally and require executi
 | Scope | Live Verification Requirement | Expected Verification Action |
 |---|---|---|
 | **Production Deployment** | Cloudflare Workers runtime deployment. | Run `wrangler deploy` and verify worker bundles without execution error. |
-| **Remote D1 Schema** | Remote database migration application. | Run `wrangler d1 migrations apply rongdhonu-db --remote` for migrations `0001` through `0020`. |
+| **Remote D1 Schema** | Remote database migration application. | Run `wrangler d1 migrations apply rongdhonu-db --remote` for migrations `0001` through `0021`. |
 | **Edge Cache Behavior** | Real-world Cloudflare edge caching. | Inspect `CF-Cache-Status` headers (`HIT`/`MISS`/`STALE`) for `/api/store/homepage` across Dhaka, Singapore, and regional edge nodes. |
 | **Production Secrets** | Cloudflare Workers secret bindings. | Verify `ADMIN_SECRET`, `JWT_SECRET`, `STEADFAST_*`, `RESEND_*`, and `SUPER_ADMIN_*` are configured via `wrangler secret put`. |
 | **Live Courier Webhooks** | Real incoming Steadfast delivery status webhooks. | Transmit a live test webhook from Steadfast and verify HMAC-SHA256 signature validation in production logs. |
