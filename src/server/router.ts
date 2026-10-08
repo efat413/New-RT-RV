@@ -33,6 +33,7 @@ import {
   saveMediaAssetInD1,
   saveMediaAssetMetadataInD1,
   getMediaAssetFromD1,
+  deleteMediaAssetFromD1,
   // Coupons
   getAllCoupons,
   insertCoupon,
@@ -3413,9 +3414,9 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
   }
 
   // ==========================================
-  // 4B. MEDIA ASSET UPLOAD & SERVING (R2 & D1)
+  // 4B. MEDIA ASSET UPLOAD & SERVING (AUTHORITATIVE D1 STORAGE)
   // ==========================================
-  if (path === '/api/upload' && method === 'POST') {
+  if ((path === '/api/upload' || path === '/api/media') && method === 'POST') {
     const { auth, errorResponse } = await requireAuth(request, env);
     if (errorResponse) return errorResponse;
     if (auth!.role === 'customer') {
@@ -3538,60 +3539,16 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const verifiedExt = validation.extension;
       const key = generateSafeMediaKey(verifiedExt);
 
-      // 3. Store asset in Cloudflare R2 (Authoritative Object Storage) or safe bounded dev fallback
-      const r2Bucket = env.R2 || env.BUCKET;
-      const isDev = isDevEnvironment(env);
-
-      // ARCHITECTURE GUARD: Production strictly requires Cloudflare R2 object storage.
-      // D1 must never be used for binary image storage in production.
-      if (!r2Bucket) {
-        if (!isDev) {
-          console.error(
-            '[Production R2 Configuration Error] env.R2 object storage binding is required in production but not configured.'
-          );
-          return jsonResponse(
-            {
-              success: false,
-              error:
-                'SERVER_CONFIGURATION_ERROR: Cloudflare R2 object storage (env.R2) is required for media uploads in production but is not bound or configured.',
-            },
-            503
-          );
-        }
-
-        // Development/testing mode fallback: Strictly bounded to small assets to avoid table bloat
-        if (fileBuffer.byteLength > MAX_DEV_D1_FALLBACK_SIZE_BYTES) {
-          return jsonResponse(
-            {
-              success: false,
-              error: `R2 object storage is not configured. Local database fallback is strictly limited to ${MAX_DEV_D1_FALLBACK_SIZE_BYTES / 1024}KB for development/testing. Uploaded file is ${(fileBuffer.byteLength / 1024).toFixed(1)}KB. Please configure R2 object storage.`,
-            },
-            413
-          );
-        }
+      // 3. Store asset authoritatively in Cloudflare D1 (media_assets table)
+      const bytes = new Uint8Array(fileBuffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
       }
+      const base64Data = btoa(binary);
 
-      if (r2Bucket) {
-        await r2Bucket.put(key, fileBuffer, {
-          httpMetadata: {
-            contentType: verifiedMime,
-          },
-        });
-        // In production and with R2: D1 stores authoritative metadata only (no binary payload)
-        if (env.DB) {
-          await saveMediaAssetMetadataInD1(env.DB, key, verifiedMime, fileBuffer.byteLength);
-        }
-      } else {
-        // Safe small dev/test fallback in D1
-        const bytes = new Uint8Array(fileBuffer);
-        let binary = '';
-        for (let i = 0; i < bytes.byteLength; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        const base64Data = btoa(binary);
-        if (env.DB) {
-          await saveMediaAssetInD1(env.DB, key, verifiedMime, base64Data, fileBuffer.byteLength);
-        }
+      if (env.DB) {
+        await saveMediaAssetInD1(env.DB, key, verifiedMime, base64Data, fileBuffer.byteLength);
       }
 
       // Pre-generate standard responsive variants (240, 360, 480, 720, 1080) if node/sharp is available
@@ -3607,12 +3564,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
               .webp({ quality: 82 })
               .toBuffer();
             const varKey = `${baseKeyWithoutExt}_w${w}.webp`;
-            if (r2Bucket) {
-              await r2Bucket.put(varKey, webpBuf, { httpMetadata: { contentType: 'image/webp' } });
-              if (env.DB) {
-                await saveMediaAssetMetadataInD1(env.DB, varKey, 'image/webp', webpBuf.byteLength);
-              }
-            } else if (isDev && webpBuf.byteLength <= MAX_DEV_D1_FALLBACK_SIZE_BYTES && env.DB) {
+            if (env.DB) {
               const b64 = Buffer.from(webpBuf).toString('base64');
               await saveMediaAssetInD1(env.DB, varKey, 'image/webp', b64, webpBuf.byteLength);
             }
@@ -3644,6 +3596,22 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
   }
 
   const mediaMatch = path.match(/^\/api\/media\/([^/]+)$/);
+  if (mediaMatch && method === 'DELETE') {
+    const rawKey = decodeURIComponent(mediaMatch[1]);
+    if (!isValidMediaKey(rawKey)) {
+      return jsonResponse({ success: false, error: 'Invalid media asset key' }, 400);
+    }
+    const { auth, errorResponse } = await requireAuth(request, env);
+    if (errorResponse) return errorResponse;
+    if (auth!.role === 'customer') {
+      return jsonResponse({ success: false, error: 'Forbidden: Customers cannot delete media.' }, 403);
+    }
+    if (env.DB) {
+      await deleteMediaAssetFromD1(env.DB, rawKey);
+    }
+    return jsonResponse({ success: true, deleted: rawKey });
+  }
+
   if (mediaMatch && method === 'GET') {
     const rawKey = decodeURIComponent(mediaMatch[1]);
 
@@ -3660,20 +3628,14 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const qualityParam = urlObj.searchParams.get('q') || urlObj.searchParams.get('quality');
       const targetQuality = qualityParam ? parseInt(qualityParam, 10) : 82;
 
-      const r2Bucket = env.R2 || env.BUCKET;
-      const isDev = isDevEnvironment(env);
       const standardWidths = [240, 360, 480, 720, 1080];
       const matchedWidth = targetWidth
         ? (standardWidths.find((sw) => sw >= targetWidth) || 1080)
         : null;
 
-      // 1. Check for pre-generated variant in R2 / D1 first:
+      // 1. Check for pre-generated variant in D1 first:
       if (targetWidth && targetWidth > 0 && targetWidth <= 2400) {
         const baseKeyWithoutExt = key.replace(/\.[^.]+$/, '');
-        // Prioritized candidate variant keys:
-        // a. Exact target width requested
-        // b. Matched standard width (240, 360, 480, 720, 1080)
-        // c. Closest alternative standard variants
         const candidateKeys = Array.from(new Set([
           `${baseKeyWithoutExt}_w${targetWidth}.webp`,
           ...(matchedWidth ? [`${baseKeyWithoutExt}_w${matchedWidth}.webp`] : []),
@@ -3685,34 +3647,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
 
         for (const variantKey of candidateKeys) {
           let variantBuffer: Uint8Array | null = null;
-          if (r2Bucket) {
-            const varObj = await r2Bucket.get(variantKey);
-            if (varObj) {
-              if (typeof (varObj as any).arrayBuffer === 'function') {
-                const ab = await (varObj as any).arrayBuffer();
-                variantBuffer = new Uint8Array(ab);
-              } else if ((varObj as any).body) {
-                const reader = ((varObj as any).body as ReadableStream).getReader();
-                const chunks: Uint8Array[] = [];
-                let total = 0;
-                while (true) {
-                  const { done, value } = await reader.read();
-                  if (done) break;
-                  if (value) {
-                    chunks.push(value);
-                    total += value.length;
-                  }
-                }
-                variantBuffer = new Uint8Array(total);
-                let offset = 0;
-                for (const chunk of chunks) {
-                  variantBuffer.set(chunk, offset);
-                  offset += chunk.length;
-                }
-              }
-            }
-          }
-          if (!variantBuffer && env.DB) {
+          if (env.DB) {
             const varAsset = await getMediaAssetFromD1(env.DB, variantKey);
             if (varAsset && varAsset.dataBase64) {
               const raw = atob(varAsset.dataBase64);
@@ -3736,7 +3671,6 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       }
 
       // 2. In production Cloudflare Workers with Image Resizing enabled:
-      // Check if Cloudflare edge image transformation is available on this request
       const isCloudflareResizeRequest = request.headers.has('cf-image-resizing');
       if (
         !isCloudflareResizeRequest &&
@@ -3772,37 +3706,8 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       let rawBuffer: Uint8Array | null = null;
       let contentType = 'image/jpeg';
 
-      if (r2Bucket) {
-        const obj = await r2Bucket.get(key);
-        if (obj) {
-          contentType = obj.httpMetadata?.contentType || 'image/jpeg';
-          if (typeof (obj as any).arrayBuffer === 'function') {
-            const ab = await (obj as any).arrayBuffer();
-            rawBuffer = new Uint8Array(ab);
-          } else if (obj.body) {
-            const reader = (obj.body as ReadableStream).getReader();
-            const chunks: Uint8Array[] = [];
-            let total = 0;
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (value) {
-                chunks.push(value);
-                total += value.length;
-              }
-            }
-            rawBuffer = new Uint8Array(total);
-            let offset = 0;
-            for (const chunk of chunks) {
-              rawBuffer.set(chunk, offset);
-              offset += chunk.length;
-            }
-          }
-        }
-      }
-
       // Check D1 media_assets table
-      if (!rawBuffer && env.DB) {
+      if (env.DB) {
         const asset = await getMediaAssetFromD1(env.DB, key);
         if (asset && asset.dataBase64) {
           const raw = atob(asset.dataBase64);
@@ -3835,16 +3740,10 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
 
             if (wantsWebp) {
               const webpBuffer = await pipeline.webp({ quality: Math.min(Math.max(targetQuality, 50), 95) }).toBuffer();
-              // Persist newly generated variant into R2 or D1 for instant future hits
               const baseKeyWithoutExt = key.replace(/\.[^.]+$/, '');
               const varKey = `${baseKeyWithoutExt}_w${effectiveWidth}.webp`;
               try {
-                if (r2Bucket) {
-                  await r2Bucket.put(varKey, webpBuffer, { httpMetadata: { contentType: 'image/webp' } });
-                  if (env.DB) {
-                    await saveMediaAssetMetadataInD1(env.DB, varKey, 'image/webp', webpBuffer.byteLength);
-                  }
-                } else if (isDev && webpBuffer.byteLength <= MAX_DEV_D1_FALLBACK_SIZE_BYTES && env.DB) {
+                if (env.DB) {
                   const b64 = Buffer.from(webpBuffer).toString('base64');
                   await saveMediaAssetInD1(env.DB, varKey, 'image/webp', b64, webpBuffer.byteLength);
                 }

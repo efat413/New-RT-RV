@@ -22,56 +22,9 @@ import {
   isValidMediaKey,
 } from '../src/server/imageSecurity';
 import { createAuthToken } from '../src/server/auth';
-import type { Env, D1Database, R2Bucket } from '../src/server/types';
+import type { Env, D1Database } from '../src/server/types';
 import * as fs from 'fs';
 import * as path from 'path';
-
-// In-memory mock R2 Bucket implementation for testing
-class MockR2Bucket implements R2Bucket {
-  public store = new Map<string, { data: Uint8Array; metadata?: any }>();
-
-  async get(key: string): Promise<any | null> {
-    const item = this.store.get(key);
-    if (!item) return null;
-    return {
-      body: new ReadableStream({
-        start(controller) {
-          controller.enqueue(item.data);
-          controller.close();
-        },
-      }),
-      arrayBuffer: async () => item.data.buffer.slice(item.data.byteOffset, item.data.byteOffset + item.data.byteLength),
-      httpMetadata: item.metadata,
-    };
-  }
-
-  async put(key: string, value: any, options?: any): Promise<any> {
-    let buf: Uint8Array;
-    if (value instanceof Uint8Array) {
-      buf = value;
-    } else if (value instanceof ArrayBuffer) {
-      buf = new Uint8Array(value);
-    } else if (Buffer.isBuffer(value)) {
-      buf = new Uint8Array(value);
-    } else {
-      buf = new Uint8Array(0);
-    }
-    this.store.set(key, { data: buf, metadata: options?.httpMetadata });
-    return { key, size: buf.byteLength };
-  }
-
-  async delete(key: string): Promise<void> {
-    this.store.delete(key);
-  }
-
-  has(key: string): boolean {
-    return this.store.has(key);
-  }
-
-  getKeys(): string[] {
-    return Array.from(this.store.keys());
-  }
-}
 
 // In-memory mock D1 Database implementation
 class MockD1Database implements D1Database {
@@ -84,8 +37,13 @@ class MockD1Database implements D1Database {
         return {
           async run() {
             if (query.includes('INSERT OR REPLACE INTO media_assets')) {
-              const [id, contentType, size] = args;
-              db.mediaAssets.set(id, { id, content_type: contentType, data: '', size: Number(size) || 0 });
+              const [id, contentType, dataBase64, size] = args;
+              db.mediaAssets.set(id, { id, content_type: contentType, data: dataBase64 || '', size: Number(size) || 0 });
+              return { success: true };
+            }
+            if (query.includes('DELETE FROM media_assets')) {
+              const id = args[0];
+              db.mediaAssets.delete(id);
               return { success: true };
             }
             return { success: true };
@@ -141,6 +99,10 @@ class MockD1Database implements D1Database {
   async exec(query: string): Promise<any> {
     return { success: true };
   }
+
+  async dump(): Promise<ArrayBuffer> {
+    return new ArrayBuffer(0);
+  }
 }
 
 // Valid sample image binaries
@@ -180,12 +142,9 @@ async function runContractVerification() {
   const adminAuth = await createAdminAuthHeader(secret);
 
   const mockDb = new MockD1Database();
-  const mockR2 = new MockR2Bucket();
 
   const env: Env = {
     DB: mockDb,
-    R2: mockR2,
-    BUCKET: mockR2,
     ADMIN_SECRET: secret,
     NODE_ENV: 'production',
   } as unknown as Env;
@@ -231,7 +190,7 @@ async function runContractVerification() {
     const data = await res.json() as any;
     assert(data.success === true, 'JPEG upload response indicates success: true');
     assert(typeof data.key === 'string' && data.key.endsWith('.jpg'), 'JPEG media key has .jpg extension');
-    assert(mockR2.has(data.key), 'JPEG stored in authoritative R2 storage');
+    assert(mockDb.mediaAssets.has(data.key), 'JPEG stored in authoritative D1 storage');
   }
 
   // =========================================================================
@@ -261,7 +220,7 @@ async function runContractVerification() {
     const data = await res.json() as any;
     assert(data.success === true, 'PNG upload response indicates success: true');
     assert(typeof data.key === 'string' && data.key.endsWith('.png'), 'PNG media key has .png extension');
-    assert(mockR2.has(data.key), 'PNG stored in authoritative R2 storage');
+    assert(mockDb.mediaAssets.has(data.key), 'PNG stored in authoritative D1 storage');
   }
 
   // =========================================================================
@@ -291,7 +250,7 @@ async function runContractVerification() {
     const data = await res.json() as any;
     assert(data.success === true, 'WebP upload response indicates success: true');
     assert(typeof data.key === 'string' && data.key.endsWith('.webp'), 'WebP media key has .webp extension');
-    assert(mockR2.has(data.key), 'WebP stored in authoritative R2 storage');
+    assert(mockDb.mediaAssets.has(data.key), 'WebP stored in authoritative D1 storage');
   }
 
   // =========================================================================

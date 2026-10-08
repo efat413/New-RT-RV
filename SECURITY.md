@@ -66,7 +66,7 @@ This document specifies the security requirements, architectural boundaries, and
 ## 7. Upload & Media Security
 
 - **Content & Magic-Byte Validation:** Upload endpoints (`/api/media/upload`, `src/server/imageSecurity.ts`) must inspect the binary header (magic bytes) to verify actual image formats (JPEG, PNG, WebP, GIF) rather than relying on the client's `Content-Type` header or file extension alone.
-- **Size Limits & Key Sanitization:** Media upload sizes are strictly capped by `MAX_IMAGE_SIZE_BYTES` (10 MB) backed by authoritative Cloudflare R2 object storage. Review attachments are strictly capped by `MAX_REVIEW_IMAGE_BYTES` (2 MB, max 5 images). Payment deposit slips are capped at 5 MB. Vector graphics (SVG), HTML, and executable scripts are strictly prohibited across all upload flows. Media keys are generated server-side using secure random tokens (`generateSafeMediaKey()`) to eliminate path traversal vulnerabilities (`../`).
+- **Size Limits & Key Sanitization:** Media upload sizes are strictly capped by `MAX_IMAGE_SIZE_BYTES` (10 MB) backed by authoritative Cloudflare D1 database storage (`media_assets` table). Review attachments are strictly capped by `MAX_REVIEW_IMAGE_BYTES` (2 MB, max 5 images). Payment deposit slips are capped at 5 MB. Vector graphics (SVG), HTML, and executable scripts are strictly prohibited across all upload flows. Media keys are generated server-side using secure random tokens (`generateSafeMediaKey()`) to eliminate path traversal vulnerabilities (`../`).
 - **Safe Serving Headers:** Media delivery routes must return strict headers (`X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'`, and appropriate `Cache-Control`).
 
 ---

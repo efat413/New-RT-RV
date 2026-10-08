@@ -908,7 +908,7 @@ export const usersApi = {
 };
 
 // ==========================================
-// 8. MEDIA UPLOAD API (R2 & D1 STORED)
+// 8. MEDIA UPLOAD & MANAGEMENT API (D1 STORED)
 // ==========================================
 export const uploadApi = {
   async upload(file: File): Promise<{ success: boolean; url?: string; key?: string; error?: string }> {
@@ -945,6 +945,19 @@ export const uploadApi = {
         success: false,
         error: 'Network error during media upload. Please try again.',
       };
+    }
+  },
+
+  async delete(key: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${API_BASE}/media/${encodeURIComponent(key)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const json = await res.json().catch(() => ({}));
+      return { success: Boolean(res.ok && json.success) };
+    } catch {
+      return { success: false, error: 'Network error during media deletion.' };
     }
   },
 };

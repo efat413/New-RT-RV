@@ -7,42 +7,17 @@ All necessary production files for your website and Cloudflare D1 integration ha
 - **Database Name**: `rongdhonu-db`
 - **Database ID**: `3276795d-5593-42c0-8e14-947f3ab1172b`
 - **D1 Binding Name**: `DB` (accessed via `env.DB`)
-- **R2 Storage Binding**: `R2` (accessed via `env.R2`)
-- **R2 Bucket Name**: `rongdhonu-media` (configured in `wrangler.json`)
 
-All shared e-commerce data (Products, Categories, Orders, Stock, Sliders, and Store Settings) is managed directly through Cloudflare D1 as the single source of truth. All uploaded images, cover photos, banners, and responsive WebP variants are stored authoritatively in Cloudflare R2 object storage, with lightweight metadata indexed in D1.
+All shared e-commerce data (Products, Categories, Orders, Stock, Sliders, Store Settings, and Media Assets) is managed directly through Cloudflare D1 as the single source of truth. Uploaded images, cover photos, banners, and responsive WebP variants are stored authoritatively in the Cloudflare D1 `media_assets` table, requiring no external R2 buckets or dependencies.
 
 ---
 
-## 📦 Cloudflare R2 Object Storage Setup (Authoritative Media Storage)
+## 📦 Cloudflare D1 Media Storage Architecture (Authoritative Media Storage)
 
-Cloudflare R2 provides scalable, high-performance object storage for all product images, category icons, logos, and banners. Production strictly requires R2 so that large binary data is never stored in D1.
-
-### Step 1: Create the R2 Bucket
-```bash
-# Create your production R2 bucket:
-npx wrangler r2 bucket create rongdhonu-media
-
-# (Optional) Create preview bucket for preview deployments:
-npx wrangler r2 bucket create rongdhonu-media-preview
-```
-
-### Step 2: Configuration in `wrangler.json`
-In `wrangler.json`, the R2 bucket is configured as:
-```json
-"r2_buckets": [
-  {
-    "binding": "R2",
-    "bucket_name": "rongdhonu-media"
-  }
-]
-```
-
-### Step 3: Cloudflare Dashboard Verification
-In Cloudflare Dashboard: **Workers & Pages > rongdhonu-trade > Settings > Bindings**:
-- Ensure R2 Bucket binding is present:
-  - Variable name: `R2`
-  - R2 Bucket: `rongdhonu-media`
+Cloudflare D1 provides unified, transactional storage for both structured e-commerce data and uploaded media assets (`media_assets` table).
+- Zero external R2 bucket dependencies required.
+- Media uploaded via `POST /api/upload` is validated (magic bytes, strict size caps, SVG rejection), compressed, and stored in `media_assets`.
+- Served immutably via `GET /api/media/:key` with proper caching headers (`Cache-Control: public, max-age=31536000, immutable`).
 
 ---
 
@@ -73,43 +48,12 @@ npm run d1:migrate
 # 1. Authenticate with your Cloudflare Account:
 npx wrangler login
 
-# 2. Apply all 21 migrations to production D1 database:
+# 2. Apply all 22 migrations to production D1 database:
 npx wrangler d1 migrations apply rongdhonu-db --remote
 
 # 3. Build & Deploy Worker:
 npm run deploy
 ```
-
----
-
-## 🔍 Troubleshooting: Error 10085 ("R2 bucket 'rongdhonu-media' not found")
-If Cloudflare reports `R2 bucket 'rongdhonu-media' not found. Verify the bucket exists in your account and that the bucket_name in your configuration is correct. [code: 10085]`:
-
-### Why this happens:
-Cloudflare R2 buckets are account-scoped cloud storage resources. Unlike static assets that are bundled from `./dist`, Cloudflare requires the remote R2 storage bucket to be explicitly provisioned in your Cloudflare account before Wrangler can attach the `env.R2` binding during a Worker deployment.
-
-### Solution A: Create the Bucket via Wrangler CLI
-Run the npm script or Wrangler command:
-```bash
-# Using the package.json script:
-npm run r2:create
-
-# Or directly with Wrangler:
-npx wrangler r2 bucket create rongdhonu-media
-```
-
-### Solution B: Create the Bucket in Cloudflare Dashboard
-1. Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com/).
-2. In the left navigation menu, select **R2 Object Storage**.
-3. (If you have not activated R2 yet, click **Get Started** / enable R2 on your account).
-4. Click **Create bucket**.
-5. Set **Bucket name** to: `rongdhonu-media` (must match exactly).
-6. Choose your preferred Location / Jurisdiction (default: Automatic).
-7. Click **Create bucket**.
-8. Once created, rerun deployment:
-   ```bash
-   npx wrangler deploy
-   ```
 
 ---
 

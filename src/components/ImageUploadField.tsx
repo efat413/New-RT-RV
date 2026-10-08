@@ -114,8 +114,28 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
 
     try {
       setIsProcessing(true);
-      // Upload directly to Cloudflare Worker upload endpoint (R2 authoritative object storage)
-      const uploadRes = await uploadApi.upload(file);
+      let fileToUpload = file;
+      if (file.type !== 'image/x-icon' && !file.name.endsWith('.ico') && file.type !== 'image/gif') {
+        try {
+          const compressedDataUrl = await processImageFile(file, maxDimension, 0.88);
+          if (compressedDataUrl && compressedDataUrl.startsWith('data:image/')) {
+            const matches = compressedDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+            if (matches) {
+              const bin = atob(matches[2]);
+              const u8 = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) {
+                u8[i] = bin.charCodeAt(i);
+              }
+              const blob = new Blob([u8], { type: matches[1] });
+              fileToUpload = new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: matches[1] });
+            }
+          }
+        } catch {
+          // Fallback to uploading original file
+        }
+      }
+      // Upload directly to Cloudflare Worker upload endpoint (D1 authoritative media storage)
+      const uploadRes = await uploadApi.upload(fileToUpload);
       if (uploadRes.success && uploadRes.url) {
         onChange(uploadRes.url);
         setSourceMode('upload');

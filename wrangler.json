@@ -30,11 +30,5 @@
       "database_id": "3276795d-5593-42c0-8e14-947f3ab1172b",
       "migrations_dir": "migrations"
     }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "R2",
-      "bucket_name": "rongdhonu-media"
-    }
   ]
 }

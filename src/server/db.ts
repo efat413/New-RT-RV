@@ -2193,11 +2193,9 @@ export async function updateStoreSettingsInD1(db: D1Database, updates: Partial<S
   return merged;
 }
 
-// Media assets persistence in D1 (used when R2 is not configured)
+// Authoritative media assets persistence in Cloudflare D1
 /**
- * Media assets metadata persistence in D1.
- * Authoritative storage for image bytes in production is Cloudflare R2 object storage.
- * D1 strictly stores metadata (id/key, content_type, size, created_at) with empty data payload.
+ * Media assets metadata persistence in D1 (retained for backward compatibility).
  */
 export async function saveMediaAssetMetadataInD1(
   db: D1Database,
@@ -2215,9 +2213,8 @@ export async function saveMediaAssetMetadataInD1(
 }
 
 /**
- * Legacy / Development-only media persistence in D1.
- * Used ONLY in local development/testing when R2 is unconfigured and file size <= MAX_DEV_D1_FALLBACK_SIZE_BYTES.
- * Production NEVER stores binary image data in D1.
+ * Authoritative media persistence in Cloudflare D1.
+ * Stores image content in the media_assets table in D1.
  */
 export async function saveMediaAssetInD1(
   db: D1Database,
@@ -2253,6 +2250,22 @@ export async function getMediaAssetFromD1(
     };
   } catch {
     return null;
+  }
+}
+
+export async function deleteMediaAssetFromD1(
+  db: D1Database,
+  id: string
+): Promise<boolean> {
+  try {
+    const baseKeyWithoutExt = id.replace(/\.[^.]+$/, '');
+    await db
+      .prepare('DELETE FROM media_assets WHERE id = ? OR id LIKE ?')
+      .bind(id, `${baseKeyWithoutExt}_w%`)
+      .run();
+    return true;
+  } catch {
+    return false;
   }
 }
 
