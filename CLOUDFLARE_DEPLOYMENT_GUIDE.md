@@ -6,9 +6,43 @@ All necessary production files for your website and Cloudflare D1 integration ha
 - **Worker Name**: `rongdhonutrade` (matches `wrangler.json` and Cloudflare Workers Builds CI)
 - **Database Name**: `rongdhonu-db`
 - **Database ID**: `3276795d-5593-42c0-8e14-947f3ab1172b`
-- **Binding Name**: `DB` (accessed via `env.DB`)
+- **D1 Binding Name**: `DB` (accessed via `env.DB`)
+- **R2 Storage Binding**: `R2` (accessed via `env.R2`)
+- **R2 Bucket Name**: `rongdhonu-media-bucket-placeholder` (replace in `wrangler.json` with your production R2 bucket)
 
-All shared e-commerce data (Products, Categories, Orders, Stock, Sliders, and Store Settings) is managed directly through Cloudflare D1 as the single source of truth across all devices and browsers.
+All shared e-commerce data (Products, Categories, Orders, Stock, Sliders, and Store Settings) is managed directly through Cloudflare D1 as the single source of truth. All uploaded images, cover photos, banners, and responsive WebP variants are stored authoritatively in Cloudflare R2 object storage, with lightweight metadata indexed in D1.
+
+---
+
+## 📦 Cloudflare R2 Object Storage Setup (Authoritative Media Storage)
+
+Cloudflare R2 provides scalable, high-performance object storage for all product images, category icons, logos, and banners. Production strictly requires R2 so that large binary data is never stored in D1.
+
+### Step 1: Create the R2 Bucket
+```bash
+# Create your production R2 bucket:
+npx wrangler r2 bucket create rongdhonu-media
+
+# (Optional) Create preview bucket for preview deployments:
+npx wrangler r2 bucket create rongdhonu-media-preview
+```
+
+### Step 2: Update `wrangler.json`
+In `wrangler.json`, replace `"rongdhonu-media-bucket-placeholder"` with your bucket name:
+```json
+"r2_buckets": [
+  {
+    "binding": "R2",
+    "bucket_name": "rongdhonu-media"
+  }
+]
+```
+
+### Step 3: Cloudflare Dashboard Verification
+In Cloudflare Dashboard: **Workers & Pages > rongdhonutrade > Settings > Bindings**:
+- Ensure R2 Bucket binding is present:
+  - Variable name: `R2`
+  - R2 Bucket: `rongdhonu-media`
 
 ---
 

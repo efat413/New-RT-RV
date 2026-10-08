@@ -2562,6 +2562,31 @@ export async function updateStoreSettingsInD1(db: D1Database, updates: Partial<S
 }
 
 // Media assets persistence in D1 (used when R2 is not configured)
+/**
+ * Media assets metadata persistence in D1.
+ * Authoritative storage for image bytes in production is Cloudflare R2 object storage.
+ * D1 strictly stores metadata (id/key, content_type, size, created_at) with empty data payload.
+ */
+export async function saveMediaAssetMetadataInD1(
+  db: D1Database,
+  id: string,
+  contentType: string,
+  size: number
+): Promise<void> {
+  await db
+    .prepare(`
+      INSERT OR REPLACE INTO media_assets (id, content_type, data, size, created_at)
+      VALUES (?, ?, '', ?, CURRENT_TIMESTAMP)
+    `)
+    .bind(id, contentType, size)
+    .run();
+}
+
+/**
+ * Legacy / Development-only media persistence in D1.
+ * Used ONLY in local development/testing when R2 is unconfigured and file size <= MAX_DEV_D1_FALLBACK_SIZE_BYTES.
+ * Production NEVER stores binary image data in D1.
+ */
 export async function saveMediaAssetInD1(
   db: D1Database,
   id: string,
@@ -2581,17 +2606,18 @@ export async function saveMediaAssetInD1(
 export async function getMediaAssetFromD1(
   db: D1Database,
   id: string
-): Promise<{ contentType: string; dataBase64: string } | null> {
+): Promise<{ contentType: string; dataBase64: string; size: number } | null> {
   try {
     const row = await db
-      .prepare('SELECT content_type, data FROM media_assets WHERE id = ? LIMIT 1')
+      .prepare('SELECT content_type, data, size FROM media_assets WHERE id = ? LIMIT 1')
       .bind(id)
-      .first<{ content_type: string; data: string }>();
+      .first<{ content_type: string; data: string; size: number }>();
 
     if (!row) return null;
     return {
       contentType: row.content_type || 'image/jpeg',
-      dataBase64: row.data,
+      dataBase64: row.data || '',
+      size: row.size || 0,
     };
   } catch {
     return null;

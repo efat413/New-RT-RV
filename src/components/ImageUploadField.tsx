@@ -95,25 +95,16 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
 
     try {
       setIsProcessing(true);
-      // Upload directly to Cloudflare Worker upload endpoint (R2 / D1 media assets)
+      // Upload directly to Cloudflare Worker upload endpoint (R2 authoritative object storage)
       const uploadRes = await uploadApi.upload(file);
       if (uploadRes.success && uploadRes.url) {
         onChange(uploadRes.url);
         setSourceMode('upload');
       } else {
-        // Safe fallback: compress image with safe dimensions
-        const safeDataUrl = await processImageFile(file, Math.min(maxDimension, 600));
-        onChange(safeDataUrl);
-        setSourceMode('upload');
+        setErrorMessage(uploadRes.error || 'Upload failed. Please check the file and try again.');
       }
     } catch (err: any) {
-      try {
-        const safeDataUrl = await processImageFile(file, Math.min(maxDimension, 600));
-        onChange(safeDataUrl);
-        setSourceMode('upload');
-      } catch (fallbackErr: any) {
-        setErrorMessage(fallbackErr?.message || 'Could not process selected image.');
-      }
+      setErrorMessage(err?.message || 'Could not upload selected image.');
     } finally {
       setIsProcessing(false);
       if (fileInputRef.current) {
@@ -215,7 +206,7 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/svg+xml,image/x-icon,.ico"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/x-icon,.ico"
             className="hidden"
             onChange={(e) => handleFileChange(e.target.files)}
           />
@@ -234,7 +225,7 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
                 Click to browse device or drag & drop image here
               </p>
               <p className="text-[11px] text-slate-400">
-                Supports PNG, JPG, WEBP, SVG, ICO up to 10MB
+                Supports PNG, JPG, WEBP, GIF, ICO up to 10MB
               </p>
             </div>
           )}

@@ -31,6 +31,7 @@ import {
   cleanupLegacyCourierCredentialsFromD1,
   // Media Assets
   saveMediaAssetInD1,
+  saveMediaAssetMetadataInD1,
   getMediaAssetFromD1,
   // Coupons
   getAllCoupons,
@@ -141,6 +142,7 @@ import {
   isValidMediaKey,
   getSafeMediaHeaders,
   MAX_IMAGE_SIZE_BYTES,
+  MAX_DEV_D1_FALLBACK_SIZE_BYTES,
   validateReviewImages,
   MAX_REVIEW_IMAGES_COUNT,
   MAX_REVIEW_IMAGE_BYTES,
@@ -303,10 +305,12 @@ function jsonResponse(data: any, status = 200, customHeaders: Record<string, str
     }
 
     // 2. Review 503 responses:
-    // Allow health check probes or explicit temporarily unavailable service messages
+    // Allow health check probes, configuration errors, or explicit temporarily unavailable service messages
     if (finalStatus === 503) {
       const isHealthCheckProbe = payload.status === 'error' && Object.keys(payload).length === 1;
-      const isServiceUnavailable = typeof payload.error === 'string' && payload.error.includes('temporarily unavailable');
+      const isServiceUnavailable =
+        typeof payload.error === 'string' &&
+        (payload.error.includes('temporarily unavailable') || payload.error.includes('SERVER_CONFIGURATION_ERROR'));
       if (!isHealthCheckProbe && !isServiceUnavailable) {
         console.error('[503 Converted to Safe 500 Internal Error]:', payload.error || payload);
         finalStatus = 500;
@@ -326,7 +330,7 @@ function jsonResponse(data: any, status = 200, customHeaders: Record<string, str
       const isServiceUnavailable =
         finalStatus === 503 &&
         typeof payload.error === 'string' &&
-        payload.error.includes('temporarily unavailable');
+        (payload.error.includes('temporarily unavailable') || payload.error.includes('SERVER_CONFIGURATION_ERROR'));
 
       if (payload.error && payload.error !== 'Internal server error.' && !isSafeOrderErrorMessage && !isServiceUnavailable) {
         console.error('[Server Internal Error Logged Safely]:', payload.error);
@@ -345,7 +349,7 @@ function jsonResponse(data: any, status = 200, customHeaders: Record<string, str
       // 4. Defense-in-depth for 4xx responses: Intercept any accidental SQL, D1 driver, or filesystem leaks
       const errStr = typeof payload.error === 'string' ? payload.error : '';
       const isLeakingInternals =
-        /sqlite|d1_error|no such table|syntax error|table |column |foreign key|prepare|bind|database disk|file not found|\/app\/|\/src\/|\.ts:\d+|\.js:\d+|cloudflare d1|admin_secret|resend_api_key|token|auth_token|typeerror|referenceerror|rangeerror|evalerror/i.test(errStr);
+        /sqlite|d1_error|no such table|syntax error|\btable\s+[a-z0-9_]|\bcolumn\s+[a-z0-9_]|foreign key|database disk|file not found|\/app\/|\/src\/|\.ts:\d+|\.js:\d+|cloudflare d1|admin_secret|resend_api_key|typeerror|referenceerror|rangeerror|evalerror/i.test(errStr);
       if (isLeakingInternals) {
         console.error('[Server Internal Leak Intercepted & Masked Safely]:', errStr);
         payload = {
@@ -594,8 +598,10 @@ function extractTokenFromRequest(request: Request): string | null {
  * Strict fail-closed: Never infers development mode from missing DB bindings.
  */
 export function isDevEnvironment(env?: any): boolean {
+  if (env?.ENVIRONMENT === 'production' || env?.PROD === true || env?.DEV === false) return false;
   if (env?.DEV === true) return true;
   if (typeof process !== 'undefined' && process.env) {
+    if (process.env.NODE_ENV === 'production') return false;
     if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
       return true;
     }
@@ -3525,22 +3531,60 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const verifiedExt = validation.extension;
       const key = generateSafeMediaKey(verifiedExt);
 
-      // 3. Store asset in Cloudflare R2 or fallback to D1 with strictly verified MIME type
+      // 3. Store asset in Cloudflare R2 (Authoritative Object Storage) or safe bounded dev fallback
       const r2Bucket = env.R2 || env.BUCKET;
+      const isDev = isDevEnvironment(env);
+
+      // ARCHITECTURE GUARD: Production strictly requires Cloudflare R2 object storage.
+      // D1 must never be used for binary image storage in production.
+      if (!r2Bucket) {
+        if (!isDev) {
+          console.error(
+            '[Production R2 Configuration Error] env.R2 object storage binding is required in production but not configured.'
+          );
+          return jsonResponse(
+            {
+              success: false,
+              error:
+                'SERVER_CONFIGURATION_ERROR: Cloudflare R2 object storage (env.R2) is required for media uploads in production but is not bound or configured.',
+            },
+            503
+          );
+        }
+
+        // Development/testing mode fallback: Strictly bounded to small assets to avoid table bloat
+        if (fileBuffer.byteLength > MAX_DEV_D1_FALLBACK_SIZE_BYTES) {
+          return jsonResponse(
+            {
+              success: false,
+              error: `R2 object storage is not configured. Local database fallback is strictly limited to ${MAX_DEV_D1_FALLBACK_SIZE_BYTES / 1024}KB for development/testing. Uploaded file is ${(fileBuffer.byteLength / 1024).toFixed(1)}KB. Please configure R2 object storage.`,
+            },
+            413
+          );
+        }
+      }
+
       if (r2Bucket) {
         await r2Bucket.put(key, fileBuffer, {
           httpMetadata: {
             contentType: verifiedMime,
           },
         });
+        // In production and with R2: D1 stores authoritative metadata only (no binary payload)
+        if (env.DB) {
+          await saveMediaAssetMetadataInD1(env.DB, key, verifiedMime, fileBuffer.byteLength);
+        }
       } else {
+        // Safe small dev/test fallback in D1
         const bytes = new Uint8Array(fileBuffer);
         let binary = '';
         for (let i = 0; i < bytes.byteLength; i++) {
           binary += String.fromCharCode(bytes[i]);
         }
         const base64Data = btoa(binary);
-        await saveMediaAssetInD1(env.DB, key, verifiedMime, base64Data, fileBuffer.byteLength);
+        if (env.DB) {
+          await saveMediaAssetInD1(env.DB, key, verifiedMime, base64Data, fileBuffer.byteLength);
+        }
       }
 
       // Pre-generate standard responsive variants (240, 360, 480, 720, 1080) if node/sharp is available
@@ -3551,11 +3595,17 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           const baseKeyWithoutExt = key.replace(/\.[^.]+$/, '');
           const standardWidths = [240, 360, 480, 720, 1080];
           for (const w of standardWidths) {
-            const webpBuf = await sharp(Buffer.from(fileBuffer)).resize(w, null, { withoutEnlargement: true, fit: 'inside' }).webp({ quality: 82 }).toBuffer();
+            const webpBuf = await sharp(Buffer.from(fileBuffer))
+              .resize(w, null, { withoutEnlargement: true, fit: 'inside' })
+              .webp({ quality: 82 })
+              .toBuffer();
             const varKey = `${baseKeyWithoutExt}_w${w}.webp`;
             if (r2Bucket) {
               await r2Bucket.put(varKey, webpBuf, { httpMetadata: { contentType: 'image/webp' } });
-            } else {
+              if (env.DB) {
+                await saveMediaAssetMetadataInD1(env.DB, varKey, 'image/webp', webpBuf.byteLength);
+              }
+            } else if (isDev && webpBuf.byteLength <= MAX_DEV_D1_FALLBACK_SIZE_BYTES && env.DB) {
               const b64 = Buffer.from(webpBuf).toString('base64');
               await saveMediaAssetInD1(env.DB, varKey, 'image/webp', b64, webpBuf.byteLength);
             }
@@ -3604,6 +3654,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       const targetQuality = qualityParam ? parseInt(qualityParam, 10) : 82;
 
       const r2Bucket = env.R2 || env.BUCKET;
+      const isDev = isDevEnvironment(env);
       const standardWidths = [240, 360, 480, 720, 1080];
       const matchedWidth = targetWidth
         ? (standardWidths.find((sw) => sw >= targetWidth) || 1080)
@@ -3656,7 +3707,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           }
           if (!variantBuffer && env.DB) {
             const varAsset = await getMediaAssetFromD1(env.DB, variantKey);
-            if (varAsset) {
+            if (varAsset && varAsset.dataBase64) {
               const raw = atob(varAsset.dataBase64);
               variantBuffer = new Uint8Array(raw.length);
               for (let i = 0; i < raw.length; i++) {
@@ -3746,7 +3797,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
       // Check D1 media_assets table
       if (!rawBuffer && env.DB) {
         const asset = await getMediaAssetFromD1(env.DB, key);
-        if (asset) {
+        if (asset && asset.dataBase64) {
           const raw = atob(asset.dataBase64);
           rawBuffer = new Uint8Array(raw.length);
           for (let i = 0; i < raw.length; i++) {
@@ -3783,7 +3834,10 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
               try {
                 if (r2Bucket) {
                   await r2Bucket.put(varKey, webpBuffer, { httpMetadata: { contentType: 'image/webp' } });
-                } else if (env.DB) {
+                  if (env.DB) {
+                    await saveMediaAssetMetadataInD1(env.DB, varKey, 'image/webp', webpBuffer.byteLength);
+                  }
+                } else if (isDev && webpBuffer.byteLength <= MAX_DEV_D1_FALLBACK_SIZE_BYTES && env.DB) {
                   const b64 = Buffer.from(webpBuffer).toString('base64');
                   await saveMediaAssetInD1(env.DB, varKey, 'image/webp', b64, webpBuffer.byteLength);
                 }

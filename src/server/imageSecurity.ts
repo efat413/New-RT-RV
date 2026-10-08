@@ -4,8 +4,15 @@
  * sanitizes filenames, enforces maximum upload sizes, and guarantees safe serving headers.
  */
 
-export const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10 Megabytes
+export const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024; // 10 Megabytes authoritative limit for R2 object storage
 export const MIN_IMAGE_SIZE_BYTES = 12; // Minimum bytes to verify magic headers
+
+/**
+ * Strict upper-bound for development/testing fallback storage in D1 when R2 is unavailable.
+ * In production, D1 binary storage is completely prohibited (fails closed with HTTP 503).
+ * In development/test mode, files exceeding this threshold are rejected to avoid D1 table bloat.
+ */
+export const MAX_DEV_D1_FALLBACK_SIZE_BYTES = 128 * 1024; // 128 Kilobytes limit for dev/test D1 fallback
 
 export type SupportedImageFormat = 'jpeg' | 'png' | 'webp' | 'gif' | 'ico';
 

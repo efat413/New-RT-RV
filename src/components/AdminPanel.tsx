@@ -1262,10 +1262,14 @@ const AdminPanelContent: React.FC = () => {
     const file = files[0];
     try {
       setIsProcessingImage(true);
-      const dataUrl = await processImageFile(file);
-      setProdImage(dataUrl);
-      setProdImageSource('upload');
-      showNotification('success', 'Cover Photo Uploaded', `Loaded "${file.name}" from your device.`);
+      const uploadRes = await uploadApi.upload(file);
+      if (uploadRes.success && uploadRes.url) {
+        setProdImage(uploadRes.url);
+        setProdImageSource('upload');
+        showNotification('success', 'Cover Photo Uploaded', `Uploaded "${file.name}" to media storage.`);
+      } else {
+        showNotification('error', 'Upload Failed', uploadRes.error || 'Could not upload image.');
+      }
     } catch (err: any) {
       showNotification('error', 'Upload Failed', err.message || 'Could not process image.');
     } finally {
@@ -1285,8 +1289,10 @@ const AdminPanelContent: React.FC = () => {
         const file = files[i];
         if (file.type.startsWith('image/')) {
           try {
-            const dataUrl = await processImageFile(file);
-            newUrls.push(dataUrl);
+            const uploadRes = await uploadApi.upload(file);
+            if (uploadRes.success && uploadRes.url) {
+              newUrls.push(uploadRes.url);
+            }
           } catch {
             // skip invalid file
           }
@@ -1297,10 +1303,10 @@ const AdminPanelContent: React.FC = () => {
         showNotification(
           'success',
           'Gallery Photos Added',
-          `Added ${newUrls.length} image${newUrls.length > 1 ? 's' : ''} from your device to the gallery.`
+          `Added ${newUrls.length} image${newUrls.length > 1 ? 's' : ''} to media storage.`
         );
       } else {
-        showNotification('error', 'No Valid Images', 'Please select valid image files.');
+        showNotification('error', 'Upload Error', 'Could not upload selected images to media storage.');
       }
     } catch (err: any) {
       showNotification('error', 'Gallery Upload Error', err.message || 'Could not process images.');
