@@ -3,12 +3,12 @@
 All necessary production files for your website and Cloudflare D1 integration have been prepared and tested.
 
 ## 🗄️ Cloudflare Configuration
-- **Worker Name**: `rongdhonutrade` (matches `wrangler.json` and Cloudflare Workers Builds CI)
+- **Worker Name**: `rongdhonu-trade` (matches `wrangler.json`, `package.json`, and Cloudflare Workers Builds CI)
 - **Database Name**: `rongdhonu-db`
 - **Database ID**: `3276795d-5593-42c0-8e14-947f3ab1172b`
 - **D1 Binding Name**: `DB` (accessed via `env.DB`)
 - **R2 Storage Binding**: `R2` (accessed via `env.R2`)
-- **R2 Bucket Name**: `rongdhonu-media-bucket-placeholder` (replace in `wrangler.json` with your production R2 bucket)
+- **R2 Bucket Name**: `rongdhonu-media` (configured in `wrangler.json`)
 
 All shared e-commerce data (Products, Categories, Orders, Stock, Sliders, and Store Settings) is managed directly through Cloudflare D1 as the single source of truth. All uploaded images, cover photos, banners, and responsive WebP variants are stored authoritatively in Cloudflare R2 object storage, with lightweight metadata indexed in D1.
 
@@ -27,8 +27,8 @@ npx wrangler r2 bucket create rongdhonu-media
 npx wrangler r2 bucket create rongdhonu-media-preview
 ```
 
-### Step 2: Update `wrangler.json`
-In `wrangler.json`, replace `"rongdhonu-media-bucket-placeholder"` with your bucket name:
+### Step 2: Configuration in `wrangler.json`
+In `wrangler.json`, the R2 bucket is configured as:
 ```json
 "r2_buckets": [
   {
@@ -39,7 +39,7 @@ In `wrangler.json`, replace `"rongdhonu-media-bucket-placeholder"` with your buc
 ```
 
 ### Step 3: Cloudflare Dashboard Verification
-In Cloudflare Dashboard: **Workers & Pages > rongdhonutrade > Settings > Bindings**:
+In Cloudflare Dashboard: **Workers & Pages > rongdhonu-trade > Settings > Bindings**:
 - Ensure R2 Bucket binding is present:
   - Variable name: `R2`
   - R2 Bucket: `rongdhonu-media`
@@ -62,8 +62,8 @@ npm run d1:migrate
 ### Step 2: Build & Deploy
 #### Option A: Automated Git CI (Cloudflare Workers Builds / GitHub Actions)
 1. Commit and push this repository to your connected GitHub repository (`main` branch).
-2. Automated CI builds (`npm run build`) and deploys the Worker named `rongdhonutrade`.
-3. In Cloudflare Dashboard: **Workers & Pages > Overview > rongdhonutrade > Settings > Bindings**:
+2. Automated CI builds (`npm run build`) and deploys the Worker named `rongdhonu-trade`.
+3. In Cloudflare Dashboard: **Workers & Pages > Overview > rongdhonu-trade > Settings > Bindings**:
    - Ensure D1 Database binding is bound:
      - Variable name: `DB`
      - D1 Database: `rongdhonu-db` (`3276795d-5593-42c0-8e14-947f3ab1172b`)
@@ -84,7 +84,7 @@ npm run deploy
 
 ## 🔍 Troubleshooting: Error 10181 ("database not found")
 If Cloudflare reports `D1 binding 'DB' references database '3276795d-5593-42c0-8e14-947f3ab1172b' which was not found [code: 10181]`:
-1. **Account Isolation**: Cloudflare D1 databases are account-scoped. If you have more than one Cloudflare account (e.g. personal vs company, or multiple email logins), the D1 database `3276795d-5593-42c0-8e14-947f3ab1172b` was created in Account A, but the Worker `rongdhonutrade` / CI Token is deploying to Account B.
+1. **Account Isolation**: Cloudflare D1 databases are account-scoped. If you have more than one Cloudflare account (e.g. personal vs company, or multiple email logins), the D1 database `3276795d-5593-42c0-8e14-947f3ab1172b` was created in Account A, but the Worker `rongdhonu-trade` / CI Token is deploying to Account B.
 2. **Resolution**:
    - Run `npx wrangler d1 list` to verify which account ID owns `rongdhonu-db`.
    - Ensure the CI deployment API token (`CLOUDFLARE_API_TOKEN`) or Workers Builds project is created under that exact same Cloudflare account.
@@ -106,7 +106,7 @@ This project is disconnected from your Git account, this may cause deployments t
    - Under **Repository access**, ensure your repository is selected and access is granted. Click **Save**.
 2. **Cloudflare Dashboard Reconnection**:
    - Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) > **Workers & Pages**.
-   - Select your project (`rongdhonutrade`).
+   - Select your project (`rongdhonu-trade`).
    - Go to **Settings** > **Builds & deployments** > **Source**.
    - Click **Reconnect** or **Manage Git Connection** and re-link your GitHub repository and default branch (`main`).
    - Go to the **Deployments** tab and click **Retry deployment**.
@@ -149,7 +149,7 @@ npx wrangler secret put COURIER_WEBHOOK_SECRET
 ```
 
 Or via the Cloudflare Dashboard:
-1. Open **Workers & Pages** &rarr; select **rongdhonutrade** &rarr; **Settings** &rarr; **Variables and Secrets**.
+1. Open **Workers & Pages** &rarr; select **rongdhonu-trade** &rarr; **Settings** &rarr; **Variables and Secrets**.
 2. Click **Add** under **Environment Variables / Secrets** (select **Secret** type):
    - `ADMIN_SECRET`
    - `STEADFAST_API_KEY`

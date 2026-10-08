@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "rongdhonutrade",
+  "name": "rongdhonu-trade",
   "main": "src/worker.ts",
   "compatibility_date": "2024-09-23",
   "observability": {
@@ -34,7 +34,7 @@
   "r2_buckets": [
     {
       "binding": "R2",
-      "bucket_name": "rongdhonu-media-bucket-placeholder"
+      "bucket_name": "rongdhonu-media"
     }
   ]
 }
