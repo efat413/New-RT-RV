@@ -90,7 +90,7 @@ All verification items are strictly categorized into exactly one of:
 |---|---|---|
 | **File Type Validation** | **VERIFIED FROM SOURCE** | MIME types are strictly validated against an allowed set (`image/png`, `image/jpeg`, `image/webp`). Disguised executables and scripts are rejected with HTTP 400. |
 | **Magic-Byte Header Validation** | **VERIFIED FROM SOURCE** | Inspected `src/server/imageSecurity.ts`. Validates file binary signatures (PNG `89 50 4E 47`, JPEG `FF D8 FF`, WebP `52 49 46 46`). HTML or scripts embedded inside image extensions are rejected. |
-| **Size Limits** | **VERIFIED FROM SOURCE** | Strict 5MB limit enforced on media upload requests (`MAX_IMAGE_SIZE_BYTES`). Uploads exceeding limit return HTTP 413 Payload Too Large. |
+| **Size Limits** | **VERIFIED FROM SOURCE** | Authoritative 10MB limit enforced on media upload requests (`MAX_IMAGE_SIZE_BYTES`) with R2 object storage. Customer review photos capped at 2MB (`MAX_REVIEW_IMAGE_BYTES`). Uploads exceeding limit return HTTP 413 Payload Too Large. |
 | **Path Traversal Protection** | **VERIFIED FROM SOURCE** | Media storage keys are generated using random alphanumeric strings (`asset-{timestamp}-{random}.ext`) and validated against `/^[a-zA-Z0-9_\-\.]+$/`. Directory traversal strings (`../`, `..\\`) are rejected. |
 | **Upload Rate Limiting** | **VERIFIED FROM SOURCE** | Enforces 10 uploads per minute per IP. The 11th upload request triggers HTTP 429 with `Retry-After: 60`. |
 

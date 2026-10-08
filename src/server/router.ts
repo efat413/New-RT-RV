@@ -3490,7 +3490,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           return jsonResponse({ success: false, error: 'No file provided in form data' }, 400);
         }
         if (file.size > MAX_IMAGE_SIZE_BYTES) {
-          return jsonResponse({ success: false, error: 'File size exceeds maximum allowed 10MB limit.' }, 413);
+          return jsonResponse({ success: false, error: `File size exceeds maximum allowed limit of ${MAX_IMAGE_SIZE_BYTES / (1024 * 1024)}MB.` }, 413);
         }
         fileBuffer = await file.arrayBuffer();
       } else {
@@ -3515,6 +3515,13 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
 
       if (!fileBuffer || fileBuffer.byteLength === 0) {
         return jsonResponse({ success: false, error: 'File is empty' }, 400);
+      }
+
+      if (fileBuffer.byteLength > MAX_IMAGE_SIZE_BYTES) {
+        return jsonResponse(
+          { success: false, error: `File size exceeds maximum allowed limit of ${MAX_IMAGE_SIZE_BYTES / (1024 * 1024)}MB.` },
+          413
+        );
       }
 
       // 2. Validate authoritative magic bytes and inspect buffer for script/markup injection

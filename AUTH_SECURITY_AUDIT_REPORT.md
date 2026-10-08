@@ -185,7 +185,7 @@ The following architectural security controls were re-verified and remain robust
 4. **Financial Data Sanitization:** `buyingPrice`, `unitProfit`, and profit margin attributes are stripped server-side (`src/server/db.ts`) unless the caller holds explicit authorization.
 5. **SSRF Mitigation:** Outbound webhook requests validate destination hostnames and IPs via `validateWebhookDestination()` (`src/server/ssrf.ts`), rejecting private IP ranges (RFC 1918), loopback, link-local, and cloud metadata IPs.
 6. **SQL Injection Defense:** All queries use parameterized statements (`env.DB.prepare().bind()`).
-7. **Media Upload Hardening:** `src/server/imageSecurity.ts` validates binary magic bytes, caps file size at 5 MB, and generates randomized media keys to prevent path traversal.
+7. **Media Upload Hardening:** `src/server/imageSecurity.ts` validates binary magic bytes, caps file size at 10 MB (`MAX_IMAGE_SIZE_BYTES`) for R2 storage, strictly limits review images to 2 MB (`MAX_REVIEW_IMAGE_BYTES`), strictly prohibits SVG/polyglots, and generates randomized media keys to prevent path traversal.
 
 ---
 

@@ -1204,10 +1204,13 @@ const AdminPanelContent: React.FC = () => {
   // --- PRODUCT IMAGE PROCESSING & UPLOAD HELPERS ---
   const processImageFile = async (file: File): Promise<string> => {
     if (!file.type.startsWith('image/')) {
-      throw new Error(`"${file.name}" is not a recognized image. Please select a JPG, PNG, WebP, GIF, or SVG file.`);
+      throw new Error(`"${file.name}" is not a recognized image. Please select a JPG, PNG, WebP, GIF, or ICO file.`);
     }
-    if (file.size > 15 * 1024 * 1024) {
-      throw new Error(`"${file.name}" is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Maximum allowed is 15MB.`);
+    if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+      throw new Error(`"${file.name}" is an SVG file. Vector graphics (SVG) are strictly prohibited for security reasons.`);
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      throw new Error(`"${file.name}" is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Maximum allowed is 10MB.`);
     }
 
     return new Promise((resolve, reject) => {
@@ -1215,7 +1218,7 @@ const AdminPanelContent: React.FC = () => {
       reader.onerror = () => reject(new Error('Failed to read image file from device.'));
       reader.onload = () => {
         const rawResult = reader.result as string;
-        if (file.type === 'image/svg+xml' || file.size < 60 * 1024) {
+        if (file.size < 60 * 1024) {
           resolve(rawResult);
           return;
         }
@@ -1260,6 +1263,24 @@ const AdminPanelContent: React.FC = () => {
   const handlePrimaryFileSelect = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const file = files[0];
+
+    // Client-side validation matching authoritative backend security policy
+    if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+      showNotification('error', 'Unsupported Format', 'Vector graphics (SVG) are strictly prohibited for security reasons.');
+      if (primaryFileInputRef.current) primaryFileInputRef.current.value = '';
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      showNotification('error', 'Invalid File', 'Please select a valid image file (JPG, PNG, WebP, GIF, ICO).');
+      if (primaryFileInputRef.current) primaryFileInputRef.current.value = '';
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showNotification('error', 'File Too Large', `"${file.name}" is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Maximum allowed is 10MB.`);
+      if (primaryFileInputRef.current) primaryFileInputRef.current.value = '';
+      return;
+    }
+
     try {
       setIsProcessingImage(true);
       const uploadRes = await uploadApi.upload(file);
@@ -1285,19 +1306,43 @@ const AdminPanelContent: React.FC = () => {
     try {
       setIsProcessingImage(true);
       const newUrls: string[] = [];
+      let skippedCount = 0;
+
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        if (file.type.startsWith('image/')) {
-          try {
-            const uploadRes = await uploadApi.upload(file);
-            if (uploadRes.success && uploadRes.url) {
-              newUrls.push(uploadRes.url);
-            }
-          } catch {
-            // skip invalid file
+
+        // Client-side validation
+        if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+          skippedCount++;
+          continue;
+        }
+        if (!file.type.startsWith('image/')) {
+          skippedCount++;
+          continue;
+        }
+        if (file.size > 10 * 1024 * 1024) {
+          skippedCount++;
+          continue;
+        }
+
+        try {
+          const uploadRes = await uploadApi.upload(file);
+          if (uploadRes.success && uploadRes.url) {
+            newUrls.push(uploadRes.url);
           }
+        } catch {
+          // skip invalid file
         }
       }
+
+      if (skippedCount > 0) {
+        showNotification(
+          'warning',
+          'Some Files Skipped',
+          `${skippedCount} file(s) skipped because they exceed the 10MB limit or are in an unsupported format (SVG prohibited).`
+        );
+      }
+
       if (newUrls.length > 0) {
         setProdGalleryImages((prev) => [...prev, ...newUrls]);
         showNotification(
@@ -1305,7 +1350,7 @@ const AdminPanelContent: React.FC = () => {
           'Gallery Photos Added',
           `Added ${newUrls.length} image${newUrls.length > 1 ? 's' : ''} to media storage.`
         );
-      } else {
+      } else if (skippedCount === 0) {
         showNotification('error', 'Upload Error', 'Could not upload selected images to media storage.');
       }
     } catch (err: any) {
@@ -2278,6 +2323,23 @@ const AdminPanelContent: React.FC = () => {
   const handleQrUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+      showNotification('error', 'Unsupported Format', 'Vector graphics (SVG) are strictly prohibited for security reasons.');
+      e.target.value = '';
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      showNotification('error', 'Invalid File', 'Please select a valid image file (JPG, PNG, WebP, GIF, ICO).');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      showNotification('error', 'File Too Large', 'Maximum allowed QR code image size is 10MB.');
+      e.target.value = '';
+      return;
+    }
+
     setIsSettingsFormDirty(true);
 
     // Fast data URL fallback immediately for responsive preview
@@ -2293,8 +2355,12 @@ const AdminPanelContent: React.FC = () => {
       const uploadRes = await uploadApi.upload(file);
       if (uploadRes.success && uploadRes.url) {
         updateDbblSetting('qrCodeUrl', uploadRes.url);
+      } else if (uploadRes.error) {
+        showNotification('error', 'Upload Failed', uploadRes.error);
       }
-    } catch {}
+    } catch (err: any) {
+      showNotification('error', 'Upload Error', err?.message || 'Failed to upload QR code.');
+    }
     e.target.value = '';
   };
 
@@ -5227,7 +5293,7 @@ const AdminPanelContent: React.FC = () => {
                   {/* Website Brand Logo Upload/Link Field */}
                   <ImageUploadField
                     label="Website Logo"
-                    sublabel="Upload brand logo directly from your device (PNG, JPG, WEBP, SVG) or paste an image link."
+                    sublabel="Upload brand logo directly from your device (PNG, JPG, WEBP, GIF, ICO) or paste an image link."
                     value={settingsForm.logoUrl}
                     onChange={(val) => updateSetting('logoUrl', val)}
                     recommendedSize="500 × 500 px"
@@ -5241,7 +5307,7 @@ const AdminPanelContent: React.FC = () => {
                   {/* Website Favicon / Browser Tab Icon Upload/Link Field */}
                   <ImageUploadField
                     label="Website Icon / Favicon"
-                    sublabel="Upload browser tab icon directly from your device (.ico, .png, .svg) or paste an icon link."
+                    sublabel="Upload browser tab icon directly from your device (.ico, .png, .webp) or paste an icon link."
                     value={settingsForm.faviconUrl || ''}
                     onChange={(val) => updateSetting('faviconUrl', val)}
                     recommendedSize="64 × 64 px"
@@ -5542,7 +5608,7 @@ const AdminPanelContent: React.FC = () => {
                           <span>Upload QR</span>
                           <input
                             type="file"
-                            accept="image/*"
+                            accept="image/jpeg,image/png,image/webp,image/gif,image/x-icon"
                             onChange={handleQrUpload}
                             className="hidden"
                           />
@@ -8061,7 +8127,7 @@ const AdminPanelContent: React.FC = () => {
                     <input
                       ref={primaryFileInputRef}
                       type="file"
-                      accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
+                      accept="image/jpeg,image/png,image/webp,image/gif,image/x-icon"
                       onChange={(e) => handlePrimaryFileSelect(e.target.files)}
                       className="hidden"
                       id="primary-product-image-file-input"
@@ -8101,7 +8167,7 @@ const AdminPanelContent: React.FC = () => {
                               <span className="text-rose-600 underline">Click to choose a photo</span> or drag and drop here
                             </p>
                             <p className="text-[11px] text-slate-500 mt-0.5">
-                              Supports JPG, PNG, WebP, GIF, SVG (up to 15MB)
+                              Supports JPG, PNG, WebP, GIF, ICO up to 10MB
                             </p>
                           </div>
                           {isProcessingImage && (
@@ -8259,7 +8325,7 @@ const AdminPanelContent: React.FC = () => {
                         ref={galleryFileInputRef}
                         type="file"
                         multiple
-                        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
+                        accept="image/jpeg,image/png,image/webp,image/gif,image/x-icon"
                         onChange={(e) => handleGalleryFilesSelect(e.target.files)}
                         className="hidden"
                         id="gallery-product-image-file-input"

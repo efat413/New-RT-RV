@@ -5066,7 +5066,7 @@ function localApiDevPlugin(): Plugin {
           const contentLength = parseInt((req.headers['content-length'] || '0') as string, 10);
           if (contentLength > MAX_IMAGE_SIZE_BYTES) {
             res.statusCode = 413;
-            return res.end(JSON.stringify({ success: false, error: 'File size exceeds maximum allowed 10MB limit.' }));
+            return res.end(JSON.stringify({ success: false, error: `File size exceeds maximum allowed limit of ${MAX_IMAGE_SIZE_BYTES / (1024 * 1024)}MB.` }));
           }
 
           const chunks: Buffer[] = [];
@@ -5122,6 +5122,15 @@ function localApiDevPlugin(): Plugin {
               if (!fileBuffer || fileBuffer.length === 0) {
                 res.statusCode = 400;
                 return res.end(JSON.stringify({ success: false, error: 'File is empty' }));
+              }
+
+              if (fileBuffer.length > MAX_IMAGE_SIZE_BYTES) {
+                res.statusCode = 413;
+                res.setHeader('Content-Type', 'application/json');
+                return res.end(JSON.stringify({
+                  success: false,
+                  error: `File size exceeds maximum allowed limit of ${MAX_IMAGE_SIZE_BYTES / (1024 * 1024)}MB.`,
+                }));
               }
 
               // Validate authoritative magic bytes and content integrity

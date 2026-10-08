@@ -395,8 +395,12 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({ productId 
 
     Array.from(files).forEach((file: File) => {
       if (!file.type.startsWith('image/')) return;
-      if (file.size > 5 * 1024 * 1024) {
-        showNotification('error', 'File Too Large', 'Each image must be under 5MB.');
+      if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+        showNotification('error', 'Unsupported Format', 'Vector graphics (SVG) are strictly prohibited for security reasons.');
+        return;
+      }
+      if (file.size > 2 * 1024 * 1024) {
+        showNotification('error', 'File Too Large', 'Each review photo must be under 2MB.');
         return;
       }
       const reader = new FileReader();
@@ -1320,36 +1324,41 @@ export const ProductDetailView: React.FC<ProductDetailViewProps> = ({ productId 
                       )}
 
                       {reviewImages.length < 5 && (
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <label className="flex-1 py-2 px-3 border border-dashed border-slate-300 hover:border-slate-400 rounded-xl bg-slate-50/70 hover:bg-slate-50 flex items-center justify-center gap-2 text-xs text-slate-600 font-medium cursor-pointer transition-colors">
-                            <UploadCloud className="w-4 h-4 text-slate-500" />
-                            <span>Upload Images from Device</span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              multiple
-                              onChange={handlePhotoUpload}
-                              className="hidden"
-                            />
-                          </label>
+                        <div className="space-y-1.5">
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <label className="flex-1 py-2 px-3 border border-dashed border-slate-300 hover:border-slate-400 rounded-xl bg-slate-50/70 hover:bg-slate-50 flex items-center justify-center gap-2 text-xs text-slate-600 font-medium cursor-pointer transition-colors">
+                              <UploadCloud className="w-4 h-4 text-slate-500" />
+                              <span>Upload Images from Device</span>
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,image/gif,image/x-icon"
+                                multiple
+                                onChange={handlePhotoUpload}
+                                className="hidden"
+                              />
+                            </label>
 
-                          <div className="flex gap-1.5 sm:w-1/2">
-                            <input
-                              type="url"
-                              value={reviewImageUrlInput}
-                              onChange={(e) => setReviewImageUrlInput(e.target.value)}
-                              placeholder="Or paste photo URL..."
-                              className="flex-1 px-3 py-2 text-xs rounded-xl border border-slate-300 focus:border-rose-500 focus:outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={handleAddImageUrl}
-                              disabled={!reviewImageUrlInput.trim()}
-                              className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs disabled:opacity-40 cursor-pointer"
-                            >
-                              Add
-                            </button>
+                            <div className="flex gap-1.5 sm:w-1/2">
+                              <input
+                                type="url"
+                                value={reviewImageUrlInput}
+                                onChange={(e) => setReviewImageUrlInput(e.target.value)}
+                                placeholder="Or paste photo URL..."
+                                className="flex-1 px-3 py-2 text-xs rounded-xl border border-slate-300 focus:border-rose-500 focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={handleAddImageUrl}
+                                disabled={!reviewImageUrlInput.trim()}
+                                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs disabled:opacity-40 cursor-pointer"
+                              >
+                                Add
+                              </button>
+                            </div>
                           </div>
+                          <p className="text-[10px] text-slate-400">
+                            Supports JPG, PNG, WebP, GIF, ICO up to 2MB each (max 5 photos). SVG files prohibited.
+                          </p>
                         </div>
                       )}
                     </div>

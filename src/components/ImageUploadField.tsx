@@ -82,6 +82,25 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
     setErrorMessage(null);
     setImageLoadError(false);
 
+    // Client-side validation matching authoritative backend security policy
+    if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+      setErrorMessage('Vector graphics (SVG) are strictly prohibited for security reasons.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setErrorMessage('Please select a valid image file (PNG, JPG, WEBP, GIF, ICO).');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setErrorMessage('File size exceeds maximum allowed 10MB limit.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     // Provide instant local image preview immediately upon selection so the user sees their new image with zero delay
     try {
       const reader = new FileReader();

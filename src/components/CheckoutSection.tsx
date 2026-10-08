@@ -151,8 +151,19 @@ export const CheckoutSection: React.FC = () => {
   const handleSlipUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+        setErrorMessage('Vector graphics (SVG) are strictly prohibited for security reasons.');
+        e.target.value = '';
+        return;
+      }
+      if (!file.type.startsWith('image/')) {
+        setErrorMessage('Please select a valid image file (JPG, PNG, WebP).');
+        e.target.value = '';
+        return;
+      }
       if (file.size > 5 * 1024 * 1024) {
         setErrorMessage('Deposit slip image size must be under 5MB.');
+        e.target.value = '';
         return;
       }
       const reader = new FileReader();
@@ -739,7 +750,7 @@ export const CheckoutSection: React.FC = () => {
                     <span>{depositSlipUrl ? 'Change Screenshot' : 'Choose Image File'}</span>
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp"
                       onChange={handleSlipUpload}
                       className="hidden"
                     />

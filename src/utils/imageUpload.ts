@@ -9,7 +9,17 @@ export async function processImageFile(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!file || !file.type.startsWith('image/')) {
-      reject(new Error('Please select a valid image file (PNG, JPG, WEBP, SVG, or ICO).'));
+      reject(new Error('Please select a valid image file (PNG, JPG, WEBP, GIF, or ICO).'));
+      return;
+    }
+
+    if (file.type === 'image/svg+xml' || file.name.toLowerCase().endsWith('.svg')) {
+      reject(new Error('Vector graphics (SVG) are strictly prohibited for security reasons.'));
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      reject(new Error('Image size exceeds maximum allowed 10MB limit.'));
       return;
     }
 
@@ -18,8 +28,8 @@ export async function processImageFile(
     reader.onload = () => {
       const rawResult = reader.result as string;
 
-      // SVGs and ICOs can be preserved directly as data URLs
-      if (file.type === 'image/svg+xml' || file.type === 'image/x-icon' || file.name.endsWith('.ico')) {
+      // ICOs can be preserved directly as data URLs
+      if (file.type === 'image/x-icon' || file.name.endsWith('.ico')) {
         resolve(rawResult);
         return;
       }

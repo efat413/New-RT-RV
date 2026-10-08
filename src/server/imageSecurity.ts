@@ -338,7 +338,7 @@ export function validateReviewImages(
         return {
           valid: false,
           images: [],
-          error: 'Review image exceeds maximum allowed limit of 2MB.',
+          error: `Review image exceeds maximum allowed limit of ${MAX_REVIEW_IMAGE_BYTES / (1024 * 1024)}MB.`,
         };
       }
 
@@ -349,7 +349,7 @@ export function validateReviewImages(
           return {
             valid: false,
             images: [],
-            error: 'Review image exceeds maximum allowed limit of 2MB.',
+            error: `Review image exceeds maximum allowed limit of ${MAX_REVIEW_IMAGE_BYTES / (1024 * 1024)}MB.`,
           };
         }
         rawBytes = new Uint8Array(binStr.length);
