@@ -82,6 +82,37 @@ npm run deploy
 
 ---
 
+## 🔍 Troubleshooting: Error 10085 ("R2 bucket 'rongdhonu-media' not found")
+If Cloudflare reports `R2 bucket 'rongdhonu-media' not found. Verify the bucket exists in your account and that the bucket_name in your configuration is correct. [code: 10085]`:
+
+### Why this happens:
+Cloudflare R2 buckets are account-scoped cloud storage resources. Unlike static assets that are bundled from `./dist`, Cloudflare requires the remote R2 storage bucket to be explicitly provisioned in your Cloudflare account before Wrangler can attach the `env.R2` binding during a Worker deployment.
+
+### Solution A: Create the Bucket via Wrangler CLI
+Run the npm script or Wrangler command:
+```bash
+# Using the package.json script:
+npm run r2:create
+
+# Or directly with Wrangler:
+npx wrangler r2 bucket create rongdhonu-media
+```
+
+### Solution B: Create the Bucket in Cloudflare Dashboard
+1. Log in to the [Cloudflare Dashboard](https://dash.cloudflare.com/).
+2. In the left navigation menu, select **R2 Object Storage**.
+3. (If you have not activated R2 yet, click **Get Started** / enable R2 on your account).
+4. Click **Create bucket**.
+5. Set **Bucket name** to: `rongdhonu-media` (must match exactly).
+6. Choose your preferred Location / Jurisdiction (default: Automatic).
+7. Click **Create bucket**.
+8. Once created, rerun deployment:
+   ```bash
+   npx wrangler deploy
+   ```
+
+---
+
 ## 🔍 Troubleshooting: Error 10181 ("database not found")
 If Cloudflare reports `D1 binding 'DB' references database '3276795d-5593-42c0-8e14-947f3ab1172b' which was not found [code: 10181]`:
 1. **Account Isolation**: Cloudflare D1 databases are account-scoped. If you have more than one Cloudflare account (e.g. personal vs company, or multiple email logins), the D1 database `3276795d-5593-42c0-8e14-947f3ab1172b` was created in Account A, but the Worker `rongdhonu-trade` / CI Token is deploying to Account B.
