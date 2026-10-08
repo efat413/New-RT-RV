@@ -408,3 +408,189 @@ export function validateReviewImages(
   return { valid: true, images: sanitizedList };
 }
 
+export const MAX_SAFE_D1_IMAGE_BYTES = Math.floor(1.5 * 1024 * 1024); // 1.5MB safe D1 maximum limit
+export const MAX_IMAGE_DIMENSION = 2000; // 2000px maximum width / height
+
+export interface OptimizedImageResult {
+  optimizedBuffer: Uint8Array;
+  mime: string;
+  format: SupportedImageFormat;
+  extension: string;
+  width?: number;
+  height?: number;
+  wasOptimized: boolean;
+}
+
+export type OptimizeImageResponse =
+  | { success: true; data: OptimizedImageResult; error?: undefined }
+  | { success: false; error: string; data?: undefined };
+
+/**
+ * Optimizes an uploaded image buffer before storing in Cloudflare D1.
+ * 1. Checks dimensions; resizes excessive dimensions to <= 2000x2000 preserving aspect ratio and orientation.
+ * 2. Compresses and strips unnecessary EXIF metadata.
+ * 3. Enforces that final buffer <= 1.5MB (preferred target <= 1MB).
+ * 4. If image cannot be safely reduced below 1.5MB, returns clear rejection error.
+ */
+export async function optimizeImageBufferForD1(
+  inputBuffer: ArrayBuffer | Uint8Array,
+  originalValidation: ImageValidationResult
+): Promise<OptimizeImageResponse> {
+  const bytes = inputBuffer instanceof Uint8Array ? inputBuffer : new Uint8Array(inputBuffer);
+  const originalFormat = originalValidation.format || 'jpeg';
+  const originalMime = originalValidation.mime || 'image/jpeg';
+  const originalExt = originalValidation.extension || 'jpg';
+
+  // If sharp is available in Node.js runtime:
+  if (typeof process !== 'undefined' && process.versions?.node) {
+    try {
+      const sharpModule = await import('sharp');
+      const sharp = (sharpModule as any).default || sharpModule;
+      const metadata = await sharp(Buffer.from(bytes)).metadata();
+      const origWidth = metadata.width || 0;
+      const origHeight = metadata.height || 0;
+
+      const needsResize = origWidth > MAX_IMAGE_DIMENSION || origHeight > MAX_IMAGE_DIMENSION;
+      const needsCompression = bytes.byteLength > 1024 * 1024; // > 1MB
+
+      // If already small and within dimension limits, preserve original binary
+      if (!needsResize && !needsCompression && bytes.byteLength <= MAX_SAFE_D1_IMAGE_BYTES) {
+        return {
+          success: true,
+          data: {
+            optimizedBuffer: bytes,
+            mime: originalMime,
+            format: originalFormat,
+            extension: originalExt,
+            width: origWidth,
+            height: origHeight,
+            wasOptimized: false,
+          },
+        };
+      }
+
+      // Perform server-side optimization
+      let pipeline = sharp(Buffer.from(bytes)).rotate(); // Auto-orient based on EXIF, strip excess metadata
+
+      if (needsResize) {
+        pipeline = pipeline.resize(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, {
+          fit: 'inside',
+          withoutEnlargement: true,
+        });
+      }
+
+      let optimizedBuf: Buffer;
+      let finalMime = originalMime;
+      let finalFormat = originalFormat;
+      let finalExt = originalExt;
+
+      // Optimize according to format
+      if (originalFormat === 'jpeg') {
+        optimizedBuf = await pipeline.jpeg({ quality: 82, mozjpeg: true }).toBuffer();
+        if (optimizedBuf.byteLength > 1.2 * 1024 * 1024) {
+          optimizedBuf = await sharp(Buffer.from(bytes))
+            .rotate()
+            .resize(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, { fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: 75, mozjpeg: true })
+            .toBuffer();
+        }
+      } else if (originalFormat === 'png') {
+        optimizedBuf = await pipeline.png({ compressionLevel: 8 }).toBuffer();
+        if (optimizedBuf.byteLength > 1.2 * 1024 * 1024) {
+          // If PNG is still large, convert to WebP to fit in D1
+          optimizedBuf = await sharp(Buffer.from(bytes))
+            .rotate()
+            .resize(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, { fit: 'inside', withoutEnlargement: true })
+            .webp({ quality: 82 })
+            .toBuffer();
+          finalMime = 'image/webp';
+          finalFormat = 'webp';
+          finalExt = 'webp';
+        }
+      } else if (originalFormat === 'webp') {
+        optimizedBuf = await pipeline.webp({ quality: 82 }).toBuffer();
+        if (optimizedBuf.byteLength > 1.2 * 1024 * 1024) {
+          optimizedBuf = await sharp(Buffer.from(bytes))
+            .rotate()
+            .resize(MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, { fit: 'inside', withoutEnlargement: true })
+            .webp({ quality: 75 })
+            .toBuffer();
+        }
+      } else {
+        // GIF / ICO: keep as is if within safe limits
+        optimizedBuf = Buffer.from(bytes);
+      }
+
+      // Check if after optimization it still exceeds safe D1 target
+      if (optimizedBuf.byteLength > MAX_SAFE_D1_IMAGE_BYTES) {
+        // Try WebP at quality 68 as final attempt
+        try {
+          optimizedBuf = await sharp(Buffer.from(bytes))
+            .rotate()
+            .resize(1800, 1800, { fit: 'inside', withoutEnlargement: true })
+            .webp({ quality: 68 })
+            .toBuffer();
+          finalMime = 'image/webp';
+          finalFormat = 'webp';
+          finalExt = 'webp';
+        } catch {}
+      }
+
+      if (optimizedBuf.byteLength > MAX_SAFE_D1_IMAGE_BYTES) {
+        return {
+          success: false,
+          error: 'Image could not be optimized to a supported size. Please use a smaller image.',
+        };
+      }
+
+      return {
+        success: true,
+        data: {
+          optimizedBuffer: new Uint8Array(optimizedBuf),
+          mime: finalMime,
+          format: finalFormat,
+          extension: finalExt,
+          wasOptimized: true,
+        },
+      };
+    } catch (optErr) {
+      console.warn('Image optimization encountered error, checking fallback size:', optErr);
+      if (bytes.byteLength > MAX_SAFE_D1_IMAGE_BYTES) {
+        return {
+          success: false,
+          error: 'Image could not be optimized to a supported size. Please use a smaller image.',
+        };
+      }
+      return {
+        success: true,
+        data: {
+          optimizedBuffer: bytes,
+          mime: originalMime,
+          format: originalFormat,
+          extension: originalExt,
+          wasOptimized: false,
+        },
+      };
+    }
+  }
+
+  // Edge / non-Node environment fallback:
+  if (bytes.byteLength > MAX_SAFE_D1_IMAGE_BYTES) {
+    return {
+      success: false,
+      error: 'Image could not be optimized to a supported size. Please use a smaller image.',
+    };
+  }
+
+  return {
+    success: true,
+    data: {
+      optimizedBuffer: bytes,
+      mime: originalMime,
+      format: originalFormat,
+      extension: originalExt,
+      wasOptimized: false,
+    },
+  };
+}
+

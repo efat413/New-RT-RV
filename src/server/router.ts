@@ -147,6 +147,8 @@ import {
   validateReviewImages,
   MAX_REVIEW_IMAGES_COUNT,
   MAX_REVIEW_IMAGE_BYTES,
+  optimizeImageBufferForD1,
+  MAX_SAFE_D1_IMAGE_BYTES,
 } from './imageSecurity';
 
 let activeApiRequest: Request | null = null;
@@ -3528,20 +3530,40 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         );
       }
 
-      const verifiedMime = validation.mime;
-      const verifiedExt = validation.extension;
+      // 3. Optimize image for Cloudflare D1 storage (normalize dimensions <= 2000px, compress, check final safe size)
+      const optimization = await optimizeImageBufferForD1(fileBuffer, validation);
+      if (!optimization.success) {
+        await recordFailedAttempt(burstKey, 10, 60, env.DB);
+        return jsonResponse(
+          { success: false, error: optimization.error },
+          400
+        );
+      }
+
+      const finalAsset = optimization.data;
+      const verifiedMime = finalAsset.mime;
+      const verifiedExt = finalAsset.extension;
+      const finalBuffer = finalAsset.optimizedBuffer;
+
+      // Final sanity check on storage size
+      if (finalBuffer.byteLength > MAX_SAFE_D1_IMAGE_BYTES) {
+        return jsonResponse(
+          { success: false, error: 'Image could not be optimized to a supported size. Please use a smaller image.' },
+          400
+        );
+      }
+
       const key = generateSafeMediaKey(verifiedExt);
 
-      // 3. Store asset authoritatively in Cloudflare D1 (media_assets table)
-      const bytes = new Uint8Array(fileBuffer);
+      // 4. Store asset authoritatively in Cloudflare D1 (media_assets table)
       let binary = '';
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
+      for (let i = 0; i < finalBuffer.byteLength; i++) {
+        binary += String.fromCharCode(finalBuffer[i]);
       }
       const base64Data = btoa(binary);
 
       if (env.DB) {
-        await saveMediaAssetInD1(env.DB, key, verifiedMime, base64Data, fileBuffer.byteLength);
+        await saveMediaAssetInD1(env.DB, key, verifiedMime, base64Data, finalBuffer.byteLength);
       }
 
       // Pre-generate standard responsive variants (240, 360, 480, 720, 1080) if node/sharp is available
@@ -3552,7 +3574,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
           const baseKeyWithoutExt = key.replace(/\.[^.]+$/, '');
           const standardWidths = [240, 360, 480, 720, 1080];
           for (const w of standardWidths) {
-            const webpBuf = await sharp(Buffer.from(fileBuffer))
+            const webpBuf = await sharp(Buffer.from(finalBuffer))
               .resize(w, null, { withoutEnlargement: true, fit: 'inside' })
               .webp({ quality: 82 })
               .toBuffer();
@@ -3567,7 +3589,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         }
       }
 
-      // 4. Record successful upload in distributed rate limiters
+      // 5. Record successful upload in distributed rate limiters
       await Promise.all([
         recordFailedAttempt(burstKey, 10, 60, env.DB),
         recordFailedAttempt(hourKey, 60, 3600, env.DB),
@@ -3578,9 +3600,9 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         success: true,
         url: mediaUrl,
         key,
-        size: fileBuffer.byteLength,
+        size: finalBuffer.byteLength,
         contentType: verifiedMime,
-        format: validation.format,
+        format: finalAsset.format,
       });
     } catch (err: any) {
       console.error('Failed to process upload:', err);
