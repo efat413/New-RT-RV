@@ -60,307 +60,47 @@ export async function checkTablesExist(db: D1Database): Promise<{ existing: stri
 }
 
 let cachedProductTableColumns: Set<string> | null = null;
-let schemaHealingAttempted = false;
-let coreSchemaInitialized = false;
+let coreSchemaValidated = false;
 
 /**
- * Ensures all core application tables, indexes, and triggers exist in Cloudflare D1.
- * Completely idempotent: Uses CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.
- * Never drops tables or destroys existing production data.
+ * Safe, read-only validation check that confirms core application tables exist in Cloudflare D1.
+ * Authoritative schema migrations are applied via the migration system (migrations/0001..0021).
+ * Never executes DDL (CREATE TABLE / CREATE INDEX / CREATE TRIGGER) during request handling.
  */
 export async function ensureCoreSchema(db: D1Database): Promise<void> {
-  if (coreSchemaInitialized) return;
+  if (coreSchemaValidated) return;
   try {
     const res = await db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all<{ name: string }>();
     const existing = new Set((res.results || []).map((r) => r.name.toLowerCase()));
 
-    const tablesToCreate: string[] = [];
+    const requiredTables = [
+      'categories',
+      'products',
+      'orders',
+      'sliders',
+      'store_settings',
+      'coupons',
+      'reviews',
+      'users',
+      'rate_limits',
+      'order_idempotency',
+      'product_slug_history',
+      'expenses',
+      'media_assets',
+      'audit_logs',
+      'password_reset_tokens',
+      'webhook_replays',
+    ];
 
-    if (!existing.has('categories')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS categories (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          slug TEXT NOT NULL UNIQUE,
-          icon_name TEXT,
-          description TEXT DEFAULT '',
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_categories_slug ON categories(slug);
-      `);
+    const missing = requiredTables.filter((t) => !existing.has(t));
+    if (missing.length > 0) {
+      console.error(
+        `[D1 Schema Integrity Error] Missing migrated table(s): ${missing.join(', ')}. Run 'wrangler d1 migrations apply'.`
+      );
     }
-
-    if (!existing.has('products')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS products (
-          id TEXT PRIMARY KEY,
-          title TEXT NOT NULL,
-          price REAL NOT NULL DEFAULT 0,
-          original_price REAL DEFAULT 0,
-          buying_price REAL DEFAULT 0,
-          category_id TEXT NOT NULL,
-          description TEXT NOT NULL DEFAULT '',
-          image_url TEXT NOT NULL DEFAULT '',
-          images_json TEXT NOT NULL DEFAULT '[]',
-          stock INTEGER NOT NULL DEFAULT 0,
-          featured INTEGER NOT NULL DEFAULT 0,
-          featured_sort_order INTEGER DEFAULT 0,
-          rating REAL DEFAULT 5.0,
-          reviews_count INTEGER DEFAULT 0,
-          specs_json TEXT DEFAULT '[]',
-          sizes_json TEXT DEFAULT '[]',
-          colors_json TEXT DEFAULT '[]',
-          sku TEXT,
-          video_url TEXT,
-          slug TEXT UNIQUE,
-          status TEXT DEFAULT 'active',
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
-        CREATE INDEX IF NOT EXISTS idx_products_featured ON products(featured);
-        CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at);
-        CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug);
-      `);
-    }
-
-    if (!existing.has('orders')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS orders (
-          id TEXT PRIMARY KEY,
-          order_number TEXT NOT NULL UNIQUE,
-          user_id TEXT,
-          user_email TEXT,
-          customer_name TEXT NOT NULL,
-          customer_phone TEXT NOT NULL,
-          customer_address TEXT NOT NULL,
-          customer_district TEXT,
-          customer_zone TEXT DEFAULT 'inside_dhaka',
-          customer_notes TEXT,
-          items_json TEXT NOT NULL,
-          subtotal REAL NOT NULL DEFAULT 0,
-          delivery_fee REAL NOT NULL DEFAULT 0,
-          total_amount REAL NOT NULL DEFAULT 0,
-          total_cost REAL NOT NULL DEFAULT 0,
-          total_profit REAL NOT NULL DEFAULT 0,
-          coupon_code TEXT,
-          discount_amount REAL DEFAULT 0,
-          payment_method TEXT NOT NULL DEFAULT 'COD',
-          payment_status TEXT NOT NULL DEFAULT 'Pending',
-          transaction_id TEXT,
-          shipping_status TEXT NOT NULL DEFAULT 'Pending',
-          courier_name TEXT,
-          courier_waybill TEXT,
-          consignment_id TEXT,
-          courier_status TEXT,
-          courier_booking_json TEXT,
-          dbbl_details_json TEXT,
-          card_details_json TEXT,
-          last_courier_sync TEXT,
-          advance_payment REAL NOT NULL DEFAULT 0,
-          advance_payment_method TEXT,
-          advance_payment_note TEXT,
-          advance_payment_updated_at TEXT,
-          advance_payment_updated_by TEXT,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_orders_order_number ON orders(order_number);
-        CREATE INDEX IF NOT EXISTS idx_orders_phone ON orders(customer_phone);
-        CREATE INDEX IF NOT EXISTS idx_orders_shipping_status ON orders(shipping_status);
-        CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
-        CREATE INDEX IF NOT EXISTS idx_orders_advance_payment ON orders(advance_payment);
-      `);
-    }
-
-    if (!existing.has('sliders')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS sliders (
-          id TEXT PRIMARY KEY,
-          title TEXT NOT NULL,
-          headline TEXT NOT NULL,
-          subtext TEXT DEFAULT '',
-          tag TEXT DEFAULT '',
-          discount_badge TEXT DEFAULT '',
-          category_id TEXT DEFAULT '',
-          image_url TEXT NOT NULL,
-          accent_gradient TEXT DEFAULT '',
-          button_text TEXT DEFAULT '',
-          sort_order INTEGER DEFAULT 0,
-          is_active INTEGER DEFAULT 1,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_sliders_sort_order ON sliders(sort_order);
-      `);
-    }
-
-    if (!existing.has('store_settings')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS store_settings (
-          id TEXT PRIMARY KEY DEFAULT 'default',
-          settings_json TEXT NOT NULL,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-    }
-
-    if (!existing.has('coupons')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS coupons (
-          code TEXT PRIMARY KEY,
-          discount_type TEXT NOT NULL,
-          discount_value REAL NOT NULL,
-          min_spend REAL DEFAULT 0,
-          description TEXT DEFAULT '',
-          is_active INTEGER NOT NULL DEFAULT 1,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-    }
-
-    if (!existing.has('reviews')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS reviews (
-          id TEXT PRIMARY KEY,
-          product_id TEXT NOT NULL,
-          author_name TEXT NOT NULL,
-          rating INTEGER NOT NULL DEFAULT 5,
-          comment TEXT NOT NULL,
-          verified_purchase INTEGER DEFAULT 1,
-          status TEXT NOT NULL DEFAULT 'approved',
-          images_json TEXT DEFAULT '[]',
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_reviews_product ON reviews(product_id);
-        CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews(status);
-        CREATE INDEX IF NOT EXISTS idx_reviews_product_status ON reviews(product_id, status);
-      `);
-    }
-
-    if (!existing.has('users')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS users (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          email TEXT NOT NULL UNIQUE,
-          password TEXT,
-          role TEXT NOT NULL DEFAULT 'customer',
-          permissions_json TEXT,
-          phone TEXT,
-          address TEXT,
-          district TEXT,
-          delivery_zone TEXT DEFAULT 'inside_dhaka',
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-      `);
-    }
-
-    if (!existing.has('rate_limits')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS rate_limits (
-          key TEXT PRIMARY KEY,
-          count INTEGER NOT NULL DEFAULT 1,
-          reset_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_rate_limits_reset_at ON rate_limits(reset_at);
-      `);
-    }
-
-    if (!existing.has('order_idempotency')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS order_idempotency (
-          key TEXT PRIMARY KEY,
-          order_id TEXT NOT NULL,
-          order_number TEXT NOT NULL,
-          response_json TEXT NOT NULL,
-          created_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_order_idempotency_created ON order_idempotency(created_at);
-      `);
-    }
-
-    if (!existing.has('product_slug_history')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS product_slug_history (
-          id TEXT PRIMARY KEY,
-          product_id TEXT NOT NULL,
-          slug TEXT NOT NULL,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_product_slug_history_slug ON product_slug_history(slug);
-        CREATE INDEX IF NOT EXISTS idx_product_slug_history_product_id ON product_slug_history(product_id);
-      `);
-    }
-
-    if (!existing.has('expenses')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS expenses (
-          id TEXT PRIMARY KEY,
-          expense_type TEXT NOT NULL,
-          amount REAL NOT NULL DEFAULT 0,
-          date TEXT NOT NULL,
-          note TEXT,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          created_by TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
-      `);
-    }
-
-    if (!existing.has('media_assets')) {
-      tablesToCreate.push(`
-        CREATE TABLE IF NOT EXISTS media_assets (
-          id TEXT PRIMARY KEY,
-          content_type TEXT NOT NULL DEFAULT 'image/jpeg',
-          data TEXT NOT NULL,
-          size INTEGER NOT NULL DEFAULT 0,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_media_assets_created ON media_assets(created_at);
-      `);
-    }
-
-    for (const sql of tablesToCreate) {
-      for (const statement of sql.split(';').map((s) => s.trim()).filter(Boolean)) {
-        try {
-          await db.prepare(statement).run();
-        } catch (err) {
-          console.warn('[D1 Core Schema Init Notice]:', err);
-        }
-      }
-    }
-
-    // Engine-level triggers preventing negative stock
-    try {
-      await db.prepare(`
-        CREATE TRIGGER IF NOT EXISTS trg_prevent_negative_stock
-        BEFORE UPDATE OF stock ON products
-        FOR EACH ROW
-        WHEN NEW.stock < 0
-        BEGIN
-          SELECT RAISE(ABORT, 'INSUFFICIENT_STOCK: Product stock cannot be negative');
-        END;
-      `).run();
-      await db.prepare(`
-        CREATE TRIGGER IF NOT EXISTS trg_prevent_negative_stock_insert
-        BEFORE INSERT ON products
-        FOR EACH ROW
-        WHEN NEW.stock < 0
-        BEGIN
-          SELECT RAISE(ABORT, 'INSUFFICIENT_STOCK: Product stock cannot be negative');
-        END;
-      `).run();
-    } catch {}
-
-    coreSchemaInitialized = true;
-  } catch (err) {
-    console.warn('[D1 Core Schema Init Check Failed]:', err);
+    coreSchemaValidated = true;
+  } catch (err: any) {
+    console.error('[D1 Schema Validation Check Failed]:', err?.message || err);
   }
 }
 
@@ -386,89 +126,30 @@ export async function getProductTableColumns(db: D1Database): Promise<Set<string
 }
 
 /**
- * Migration verification & self-healing helper.
- * Ensures the products table contains all required columns (e.g. video_url, buying_price, featured_sort_order)
- * without data loss, table drops, or resets.
+ * Safe read-only column verification helper.
+ * Authoritative columns (video_url, buying_price, featured_sort_order, slug) are provided
+ * by migrations 0001, 0004, 0012, 0017, and 0018.
+ * Never executes runtime ALTER TABLE or DDL mutations during request handling.
  */
+let productSchemaValidated = false;
+
 export async function ensureProductTableSchema(db: D1Database): Promise<Set<string>> {
-  await ensureCoreSchema(db);
-  let columns = await getProductTableColumns(db);
-
-  if (!schemaHealingAttempted) {
-    schemaHealingAttempted = true;
-
-    // Self-heal: video_url column (missing in initial schema.sql)
-    if (!columns.has('video_url')) {
-      try {
-        await db.prepare('ALTER TABLE products ADD COLUMN video_url TEXT').run();
-        cachedProductTableColumns = null;
-        columns = await getProductTableColumns(db);
-        console.log('[D1] Self-healed: added missing video_url column to products table.');
-      } catch (err: any) {
-        console.warn('[D1] video_url column addition notice:', err?.message || err);
-      }
-    }
-
-    // Self-heal: buying_price column
-    if (!columns.has('buying_price')) {
-      try {
-        await db.prepare('ALTER TABLE products ADD COLUMN buying_price REAL DEFAULT 0').run();
-        cachedProductTableColumns = null;
-        columns = await getProductTableColumns(db);
-        console.log('[D1] Self-healed: added missing buying_price column to products table.');
-      } catch (err: any) {
-        console.warn('[D1] buying_price column addition notice:', err?.message || err);
-      }
-    }
-
-    // Self-heal: featured_sort_order column
-    if (!columns.has('featured_sort_order')) {
-      try {
-        await db.prepare('ALTER TABLE products ADD COLUMN featured_sort_order INTEGER DEFAULT 0').run();
-        cachedProductTableColumns = null;
-        columns = await getProductTableColumns(db);
-        console.log('[D1] Self-healed: added missing featured_sort_order column to products table.');
-      } catch (err: any) {
-        console.warn('[D1] featured_sort_order column addition notice:', err?.message || err);
-      }
-    }
-
-    // Self-heal: slug column and unique index
-    if (!columns.has('slug')) {
-      try {
-        await db.prepare('ALTER TABLE products ADD COLUMN slug TEXT').run();
-        await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_products_slug ON products(slug)').run();
-        cachedProductTableColumns = null;
-        columns = await getProductTableColumns(db);
-        console.log('[D1] Self-healed: added missing slug column to products table.');
-      } catch (err: any) {
-        console.warn('[D1] slug column addition notice:', err?.message || err);
-      }
-    }
-
-    // Self-heal: product_slug_history table and indexes for SEO 301 redirects
-    try {
-      await db.prepare(`
-        CREATE TABLE IF NOT EXISTS product_slug_history (
-          id TEXT PRIMARY KEY,
-          product_id TEXT NOT NULL,
-          slug TEXT NOT NULL,
-          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
-        )
-      `).run();
-      await db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_product_slug_history_slug ON product_slug_history(slug)').run();
-      await db.prepare('CREATE INDEX IF NOT EXISTS idx_product_slug_history_product_id ON product_slug_history(product_id)').run();
-    } catch (err: any) {
-      console.warn('[D1] product_slug_history table self-heal notice:', err?.message || err);
+  const columns = await getProductTableColumns(db);
+  if (!productSchemaValidated) {
+    productSchemaValidated = true;
+    const requiredColumns = ['video_url', 'buying_price', 'featured_sort_order', 'slug'];
+    const missing = requiredColumns.filter((c) => !columns.has(c));
+    if (missing.length > 0) {
+      console.error(
+        `[D1 Schema Integrity Error] Products table missing migrated column(s): ${missing.join(', ')}. Please apply D1 migrations.`
+      );
     }
   }
-
   return columns;
 }
 
 let cachedOrderTableColumns: Set<string> | null = null;
-let orderSchemaHealingAttempted = false;
+let orderSchemaValidated = false;
 
 export async function getOrderTableColumns(db: D1Database): Promise<Set<string>> {
   await ensureCoreSchema(db);
@@ -496,79 +177,29 @@ export async function getOrderTableColumns(db: D1Database): Promise<Set<string>>
   ]);
 }
 
+/**
+ * Safe read-only column verification helper.
+ * Authoritative advance payment columns are provided by migration 0020_advance_payment.sql.
+ * Never executes runtime ALTER TABLE or DDL mutations during request handling.
+ */
 export async function ensureOrderTableSchema(db: D1Database): Promise<Set<string>> {
-  await ensureCoreSchema(db);
-  let columns = await getOrderTableColumns(db);
-
-  if (!orderSchemaHealingAttempted) {
-    orderSchemaHealingAttempted = true;
-
-    // Self-heal: advance_payment column
-    if (!columns.has('advance_payment')) {
-      try {
-        await db.prepare('ALTER TABLE orders ADD COLUMN advance_payment REAL NOT NULL DEFAULT 0').run();
-        cachedOrderTableColumns = null;
-        columns = await getOrderTableColumns(db);
-        console.log('[D1] Self-healed: added missing advance_payment column to orders table.');
-      } catch (err: any) {
-        console.warn('[D1] advance_payment column addition notice:', err?.message || err);
-      }
+  const columns = await getOrderTableColumns(db);
+  if (!orderSchemaValidated) {
+    orderSchemaValidated = true;
+    const requiredColumns = [
+      'advance_payment',
+      'advance_payment_method',
+      'advance_payment_note',
+      'advance_payment_updated_at',
+      'advance_payment_updated_by',
+    ];
+    const missing = requiredColumns.filter((c) => !columns.has(c));
+    if (missing.length > 0) {
+      console.error(
+        `[D1 Schema Integrity Error] Orders table missing migrated column(s): ${missing.join(', ')}. Please apply D1 migrations.`
+      );
     }
-
-    // Self-heal: advance_payment_method column
-    if (!columns.has('advance_payment_method')) {
-      try {
-        await db.prepare('ALTER TABLE orders ADD COLUMN advance_payment_method TEXT').run();
-        cachedOrderTableColumns = null;
-        columns = await getOrderTableColumns(db);
-        console.log('[D1] Self-healed: added missing advance_payment_method column to orders table.');
-      } catch (err: any) {
-        console.warn('[D1] advance_payment_method column addition notice:', err?.message || err);
-      }
-    }
-
-    // Self-heal: advance_payment_note column
-    if (!columns.has('advance_payment_note')) {
-      try {
-        await db.prepare('ALTER TABLE orders ADD COLUMN advance_payment_note TEXT').run();
-        cachedOrderTableColumns = null;
-        columns = await getOrderTableColumns(db);
-        console.log('[D1] Self-healed: added missing advance_payment_note column to orders table.');
-      } catch (err: any) {
-        console.warn('[D1] advance_payment_note column addition notice:', err?.message || err);
-      }
-    }
-
-    // Self-heal: advance_payment_updated_at column
-    if (!columns.has('advance_payment_updated_at')) {
-      try {
-        await db.prepare('ALTER TABLE orders ADD COLUMN advance_payment_updated_at TEXT').run();
-        cachedOrderTableColumns = null;
-        columns = await getOrderTableColumns(db);
-        console.log('[D1] Self-healed: added missing advance_payment_updated_at column to orders table.');
-      } catch (err: any) {
-        console.warn('[D1] advance_payment_updated_at column addition notice:', err?.message || err);
-      }
-    }
-
-    // Self-heal: advance_payment_updated_by column
-    if (!columns.has('advance_payment_updated_by')) {
-      try {
-        await db.prepare('ALTER TABLE orders ADD COLUMN advance_payment_updated_by TEXT').run();
-        cachedOrderTableColumns = null;
-        columns = await getOrderTableColumns(db);
-        console.log('[D1] Self-healed: added missing advance_payment_updated_by column to orders table.');
-      } catch (err: any) {
-        console.warn('[D1] advance_payment_updated_by column addition notice:', err?.message || err);
-      }
-    }
-
-    // Self-heal: index on advance_payment
-    try {
-      await db.prepare('CREATE INDEX IF NOT EXISTS idx_orders_advance_payment ON orders(advance_payment)').run();
-    } catch {}
   }
-
   return columns;
 }
 
@@ -1871,7 +1502,6 @@ export async function deleteCategoryFromD1(db: D1Database, idOrSlug: string): Pr
 // ==============================================================
 
 let cachedSliderTableColumns: Set<string> | null = null;
-let sliderSchemaHealingAttempted = false;
 
 export async function getSliderTableColumns(db: D1Database): Promise<Set<string>> {
   await ensureCoreSchema(db);
@@ -1891,19 +1521,21 @@ export async function getSliderTableColumns(db: D1Database): Promise<Set<string>
   ]);
 }
 
+/**
+ * Safe read-only column verification helper.
+ * Authoritative is_active column is provided by migration 0016_slider_active_status.sql.
+ * Never executes runtime ALTER TABLE or DDL mutations during request handling.
+ */
+let sliderSchemaValidated = false;
+
 export async function ensureSliderTableSchema(db: D1Database): Promise<Set<string>> {
-  let columns = await getSliderTableColumns(db);
-  if (!sliderSchemaHealingAttempted) {
-    sliderSchemaHealingAttempted = true;
+  const columns = await getSliderTableColumns(db);
+  if (!sliderSchemaValidated) {
+    sliderSchemaValidated = true;
     if (!columns.has('is_active')) {
-      try {
-        await db.prepare('ALTER TABLE sliders ADD COLUMN is_active INTEGER DEFAULT 1').run();
-        cachedSliderTableColumns = null;
-        columns = await getSliderTableColumns(db);
-        console.log('[D1] Self-healed: added missing is_active column to sliders table.');
-      } catch (err: any) {
-        console.warn('[D1] is_active column addition notice:', err?.message || err);
-      }
+      console.error(
+        "[D1 Schema Integrity Error] Sliders table missing migrated column 'is_active'. Please apply migration 0016."
+      );
     }
   }
   return columns;
