@@ -82,19 +82,12 @@ export function hasUserPermission(
       return false;
     }
 
-    // Strict Financial Security: Any financial alias or cost/profit query is permanently Super Admin-only
+    // Strict Security: Super Admin-only permissions and sensitive admin functions are blocked for non-super admins
     const normalizedKey = permStr.toLowerCase().replace(/[^a-z0-9]/g, '');
     if (
-      normalizedKey.includes('buyingprice') ||
-      normalizedKey.includes('viewbuyingprice') ||
       normalizedKey.includes('managebuyingprice') ||
-      normalizedKey.includes('unitprofit') ||
-      normalizedKey.includes('viewprofit') ||
       normalizedKey.includes('reportprofit') ||
       normalizedKey.includes('reportfinancial') ||
-      normalizedKey.includes('costprice') ||
-      normalizedKey.includes('purchaseprice') ||
-      normalizedKey.includes('productcost') ||
       normalizedKey.includes('settingsmanage') ||
       normalizedKey.includes('managesettings') ||
       normalizedKey.includes('usermanage') ||
@@ -125,8 +118,8 @@ export function hasUserPermission(
     if (permStr === 'product.buying_price' || permStr === 'product.view_buying_price') {
       return Boolean(user.permissions['product.view_buying_price'] || user.permissions['product.buying_price']);
     }
-    if (permStr === 'report.profit' || permStr === 'product.view_profit') {
-      return Boolean(user.permissions['report.profit'] || user.permissions['product.view_profit']);
+    if (permStr === 'product.view_profit') {
+      return Boolean(user.permissions['product.view_profit']);
     }
 
     // Check granular key against legacy mapping if not directly specified

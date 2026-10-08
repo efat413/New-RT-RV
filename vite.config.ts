@@ -775,19 +775,12 @@ function localApiDevPlugin(): Plugin {
     const permStr = String(permission);
     if (isSuperAdminOnlyPermission(permStr as any)) return false;
 
-    // Strict Financial & Privileged Security: Any financial, settings, user, or permission alias is permanently Super Admin-only
+    // Strict Security: Super Admin-only permissions and sensitive admin functions are blocked for non-super admins
     const normalizedKey = permStr.toLowerCase().replace(/[^a-z0-9]/g, '');
     if (
-      normalizedKey.includes('buyingprice') ||
-      normalizedKey.includes('viewbuyingprice') ||
       normalizedKey.includes('managebuyingprice') ||
-      normalizedKey.includes('unitprofit') ||
-      normalizedKey.includes('viewprofit') ||
       normalizedKey.includes('reportprofit') ||
       normalizedKey.includes('reportfinancial') ||
-      normalizedKey.includes('costprice') ||
-      normalizedKey.includes('purchaseprice') ||
-      normalizedKey.includes('productcost') ||
       normalizedKey.includes('settingsmanage') ||
       normalizedKey.includes('managesettings') ||
       normalizedKey.includes('usermanage') ||

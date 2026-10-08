@@ -1169,19 +1169,12 @@ function hasPermission(
     return false; // Permanently Super Admin-only!
   }
 
-  // Strict Financial & Privileged Security: Any financial, settings, user, or permission alias is permanently Super Admin-only
+  // Strict Security: Super Admin-only permissions and sensitive admin functions are blocked for non-super admins
   const normalizedKey = keyStr.toLowerCase().replace(/[^a-z0-9]/g, '');
   if (
-    normalizedKey.includes('buyingprice') ||
-    normalizedKey.includes('viewbuyingprice') ||
     normalizedKey.includes('managebuyingprice') ||
-    normalizedKey.includes('unitprofit') ||
-    normalizedKey.includes('viewprofit') ||
     normalizedKey.includes('reportprofit') ||
     normalizedKey.includes('reportfinancial') ||
-    normalizedKey.includes('costprice') ||
-    normalizedKey.includes('purchaseprice') ||
-    normalizedKey.includes('productcost') ||
     normalizedKey.includes('settingsmanage') ||
     normalizedKey.includes('managesettings') ||
     normalizedKey.includes('usermanage') ||
@@ -6773,7 +6766,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
         'X-Webhook-Timestamp': new Date().toISOString(),
       };
       const serializedTestPayload = JSON.stringify(testPayload);
-      const effectiveTestSecret = secret || (env?.COURIER_WEBHOOK_SECRET || env?.STEADFAST_SECRET_KEY || '').trim();
+      const effectiveTestSecret = secret || (env?.COURIER_WEBHOOK_SECRET || '').trim();
       if (effectiveTestSecret) {
         headers['X-Webhook-Secret'] = effectiveTestSecret;
         const sig = await computeHmacSha256Hex(effectiveTestSecret, serializedTestPayload);
@@ -6909,7 +6902,7 @@ export async function handleApiRequest(request: Request, env: Env, ctx?: any): P
             'X-Webhook-Timestamp': new Date().toISOString(),
           };
           const serializedPayload = JSON.stringify(payload);
-          const effectiveTriggerSecret = t.secret || (env?.COURIER_WEBHOOK_SECRET || env?.STEADFAST_SECRET_KEY || '').trim();
+          const effectiveTriggerSecret = t.secret || (env?.COURIER_WEBHOOK_SECRET || '').trim();
           if (effectiveTriggerSecret) {
             headers['X-Webhook-Secret'] = effectiveTriggerSecret;
             const sig = await computeHmacSha256Hex(effectiveTriggerSecret, serializedPayload);

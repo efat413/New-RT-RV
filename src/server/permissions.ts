@@ -98,10 +98,7 @@ export const SUPER_ADMIN_ONLY_PERMISSIONS: ReadonlySet<PermissionKey> = new Set<
   'permission.manage',
   'user.manage',
   'user.delete',
-  'product.view_buying_price',
   'product.manage_buying_price',
-  'product.buying_price',
-  'product.view_profit',
   'report.profit',
   'report.financial',
   'settings.manage',
@@ -153,7 +150,7 @@ export const PERMISSIONS_METADATA: Record<PermissionKey, PermissionMetadata> = {
     group: 'Financial / Sensitive Data',
     displayName: 'View Buying Price',
     description: 'Access supplier wholesale buying price on products and orders.',
-    superAdminOnly: true,
+    superAdminOnly: false,
     sensitive: true,
     dangerous: false,
   },
@@ -171,7 +168,7 @@ export const PERMISSIONS_METADATA: Record<PermissionKey, PermissionMetadata> = {
     group: 'Financial / Sensitive Data',
     displayName: 'Buying / Purchase Cost',
     description: 'Access supplier wholesale buying price and cost on products and orders.',
-    superAdminOnly: true,
+    superAdminOnly: false,
     sensitive: true,
     dangerous: false,
   },
@@ -180,7 +177,7 @@ export const PERMISSIONS_METADATA: Record<PermissionKey, PermissionMetadata> = {
     group: 'Financial / Sensitive Data',
     displayName: 'View Product Profit',
     description: 'Access unit gross profit and profit margins on individual products.',
-    superAdminOnly: true,
+    superAdminOnly: false,
     sensitive: true,
     dangerous: false,
   },
@@ -643,35 +640,35 @@ export interface LegacyPermissionMapping {
 }
 
 export const LEGACY_PERMISSION_MAPPINGS: Record<string, LegacyPermissionMapping> = {
-  // 1. Sensitive Financial Aliases (Super Admin Only)
+  // 1. Sensitive Financial Aliases
   'product.buying_price': {
     legacyKey: 'product.buying_price',
     canonicalKey: 'product.view_buying_price',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'Wholesale buying price viewing alias.',
   },
   'buying_price': {
     legacyKey: 'buying_price',
     canonicalKey: 'product.view_buying_price',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'Shorthand buying price viewing alias.',
   },
   'buyingPrice': {
     legacyKey: 'buyingPrice',
     canonicalKey: 'product.view_buying_price',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'CamelCase buying price viewing alias.',
   },
   'view_buying_price': {
     legacyKey: 'view_buying_price',
     canonicalKey: 'product.view_buying_price',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'Shorthand viewing buying price alias.',
   },
   'viewBuyingPrice': {
     legacyKey: 'viewBuyingPrice',
     canonicalKey: 'product.view_buying_price',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'CamelCase viewing buying price alias.',
   },
   'product.manage_buying_price': {
@@ -695,7 +692,7 @@ export const LEGACY_PERMISSION_MAPPINGS: Record<string, LegacyPermissionMapping>
   'product.view_profit': {
     legacyKey: 'product.view_profit',
     canonicalKey: 'product.view_profit',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'Unit gross profit and margin access.',
   },
   'report.profit': {
@@ -707,31 +704,31 @@ export const LEGACY_PERMISSION_MAPPINGS: Record<string, LegacyPermissionMapping>
   'profit': {
     legacyKey: 'profit',
     canonicalKey: 'product.view_profit',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'Shorthand profit alias.',
   },
   'unitprofit': {
     legacyKey: 'unitprofit',
     canonicalKey: 'product.view_profit',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'Shorthand unit profit alias.',
   },
   'unitProfit': {
     legacyKey: 'unitProfit',
     canonicalKey: 'product.view_profit',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'CamelCase unit profit alias.',
   },
   'view_profit': {
     legacyKey: 'view_profit',
     canonicalKey: 'product.view_profit',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'Shorthand view profit alias.',
   },
   'viewProfit': {
     legacyKey: 'viewProfit',
     canonicalKey: 'product.view_profit',
-    sensitivity: 'super_admin_only',
+    sensitivity: 'sensitive',
     description: 'CamelCase view profit alias.',
   },
   'report_profit': {
@@ -1039,10 +1036,8 @@ export function resolveUserPermissions(
     base['product.view_buying_price'] = hasBuying;
     base['product.buying_price'] = hasBuying;
   }
-  if ('report.profit' in parsed || 'product.view_profit' in parsed) {
-    const hasProfit = Boolean(parsed['report.profit'] || parsed['product.view_profit']);
-    base['report.profit'] = hasProfit;
-    base['product.view_profit'] = hasProfit;
+  if ('product.view_profit' in parsed) {
+    base['product.view_profit'] = Boolean(parsed['product.view_profit']);
   }
 
   // STRICT PRIVILEGE RESTRICTION:

@@ -110,31 +110,19 @@ export async function verifyCourierWebhookAuth(
 
   const candidateSecrets = new Set<string>();
 
+  // Dedicated courier webhook secret from worker environment variable
   const envWebhookSecret = (env?.COURIER_WEBHOOK_SECRET || process.env.COURIER_WEBHOOK_SECRET || '').trim();
   if (envWebhookSecret && (!envAdminSecret || !timingSafeEqualString(envWebhookSecret, envAdminSecret))) {
     candidateSecrets.add(envWebhookSecret);
   }
 
-  const envSteadfastSecret = (env?.STEADFAST_SECRET_KEY || process.env.STEADFAST_SECRET_KEY || '').trim();
-  if (envSteadfastSecret && (!envAdminSecret || !timingSafeEqualString(envSteadfastSecret, envAdminSecret))) {
-    candidateSecrets.add(envSteadfastSecret);
+  // Dedicated courier webhook secret from database store settings
+  const settingsWebhookSecret = (settings?.courierWebhookSecret || '').trim();
+  if (settingsWebhookSecret && (!envAdminSecret || !timingSafeEqualString(settingsWebhookSecret, envAdminSecret))) {
+    candidateSecrets.add(settingsWebhookSecret);
   }
 
-  const settingsSteadfastSecret = (settings?.steadfastSecretKey || '').trim();
-  if (settingsSteadfastSecret && (!envAdminSecret || !timingSafeEqualString(settingsSteadfastSecret, envAdminSecret))) {
-    candidateSecrets.add(settingsSteadfastSecret);
-  }
-
-  const envSteadfastApiKey = (env?.STEADFAST_API_KEY || process.env.STEADFAST_API_KEY || '').trim();
-  if (envSteadfastApiKey && (!envAdminSecret || !timingSafeEqualString(envSteadfastApiKey, envAdminSecret))) {
-    candidateSecrets.add(envSteadfastApiKey);
-  }
-
-  const settingsSteadfastApiKey = (settings?.steadfastApiKey || '').trim();
-  if (settingsSteadfastApiKey && (!envAdminSecret || !timingSafeEqualString(settingsSteadfastApiKey, envAdminSecret))) {
-    candidateSecrets.add(settingsSteadfastApiKey);
-  }
-
+  // Dedicated per-webhook secrets configured in courier webhooks registry
   if (Array.isArray(settings?.courierWebhooks)) {
     for (const w of settings.courierWebhooks) {
       if (w.secret && typeof w.secret === 'string' && w.secret.trim()) {
@@ -145,6 +133,12 @@ export async function verifyCourierWebhookAuth(
       }
     }
   }
+
+  // CRITICAL ARCHITECTURAL & SECURITY ENFORCEMENT:
+  // Outbound courier API keys and secrets (STEADFAST_API_KEY, STEADFAST_SECRET_KEY)
+  // are outbound client credentials for invoking third-party courier APIs.
+  // They must NEVER be accepted as inbound webhook authentication fallbacks.
+  // Inbound webhook authentication strictly requires dedicated COURIER_WEBHOOK_SECRET.
 
   // Double-check: Unconditionally purge ADMIN_SECRET if present in candidate set
   if (envAdminSecret) {
@@ -375,18 +369,6 @@ export async function verifyCourierWebhookAuth(
         status: 401,
         error: 'Unauthorized: Invalid courier webhook secret.',
       };
-    }
-
-    // If Api-Key is also provided, check Steadfast API Key consistency
-    const configuredApiKey = (env?.STEADFAST_API_KEY || process.env.STEADFAST_API_KEY || settings?.steadfastApiKey || '').trim();
-    if (apiKeyHeader && configuredApiKey) {
-      if (!timingSafeEqualString(apiKeyHeader, configuredApiKey)) {
-        return {
-          authenticated: false,
-          status: 401,
-          error: 'Unauthorized: Invalid courier Api-Key header.',
-        };
-      }
     }
 
     for (const secret of candidateSecrets) {
